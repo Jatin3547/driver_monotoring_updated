@@ -1,0 +1,9 @@
+# OPTIONAL — only needed to run REAL computer-vision inference (Phase G/O
+# "live" AI mode). Heavy, slow to install, and require a working webcam.
+# The application runs fully in AI "simulation" mode without these.
+#
+#   pip install -r requirements-ai.txt
+#
+opencv-python==4.10.0.84
+mediapipe==0.10.18
+ultralytics==8.3.55

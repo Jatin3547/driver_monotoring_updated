@@ -1,0 +1,7 @@
+{
+  "name": "FleetGuard - AI Driver Monitoring & Fleet Management",
+  "description": "AI-powered driver monitoring and fleet management platform featuring real-time telematics, driver safety scores, incident logs, and vehicle tracking.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

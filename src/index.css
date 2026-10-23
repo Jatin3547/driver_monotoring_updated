@@ -1,0 +1,118 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* Brand */
+  --color-brand-navy: #0f172a;
+  --color-brand-blue: #2563eb;
+  --color-brand-blue-dark: #1d4ed8;
+
+  /* Status */
+  --color-status-success-bg: #f0fdf4;
+  --color-status-success-text: #15803d;
+  --color-status-success-border: #bbf7d0;
+
+  --color-status-warning-bg: #fffbeb;
+  --color-status-warning-text: #b45309;
+  --color-status-warning-border: #fde68a;
+
+  --color-status-danger-bg: #fef2f2;
+  --color-status-danger-text: #b91c1c;
+  --color-status-danger-border: #fecaca;
+
+  --color-status-info-bg: #eff6ff;
+  --color-status-info-text: #1d4ed8;
+  --color-status-info-border: #bfdbfe;
+
+  --color-status-neutral-bg: #f8fafc;
+  --color-status-neutral-text: #475569;
+  --color-status-neutral-border: #e2e8f0;
+
+  /* Surfaces (light mode defaults) */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-inset: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+}
+
+:root[data-theme='dark'] {
+  --color-surface: #0f172a;
+  --color-surface-muted: #111c34;
+  --color-surface-inset: #1a2740;
+  --color-border: #24314d;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-text-muted: #7c8db0;
+
+  --color-status-success-bg: #0f2a1a;
+  --color-status-success-text: #4ade80;
+  --color-status-success-border: #14532d;
+
+  --color-status-warning-bg: #2a1f0a;
+  --color-status-warning-text: #fbbf24;
+  --color-status-warning-border: #78350f;
+
+  --color-status-danger-bg: #2a1212;
+  --color-status-danger-text: #f87171;
+  --color-status-danger-border: #7f1d1d;
+
+  --color-status-info-bg: #101f36;
+  --color-status-info-text: #60a5fa;
+  --color-status-info-border: #1e3a5f;
+
+  --color-status-neutral-bg: #1a2740;
+  --color-status-neutral-text: #94a3b8;
+  --color-status-neutral-border: #24314d;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-surface-muted);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: var(--color-surface-inset);
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-brand-blue);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
