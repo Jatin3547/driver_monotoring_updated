@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { Camera, Eye, Moon, Smartphone, User, UserX, Video, VideoOff, Volume2, VolumeX, AlertTriangle } from 'lucide-react';
+import { Camera, Eye, Moon, Smartphone, User, UserX, Video, VideoOff, Volume2, VolumeX, AlertTriangle, Activity } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { monitoringSignalTone } from '@/utils/statusColors';
 import { timeAgo } from '@/utils/formatDate';
 import { playImmediateDriverWarning, isAudioMuted } from '@/utils/audioAlert';
+import { API_BASE_URL } from '@/services/config';
 import type { Driver, DriverMonitoringStatus, Vehicle } from '@/types';
 
 interface Props {
@@ -21,9 +22,12 @@ const signalRows: { key: keyof DriverMonitoringStatus; label: string; icon: type
 ];
 
 export function DriverMonitorCard({ status, driver, vehicle }: Props) {
-  const isPrimaryLive = status.source === 'live' && status.driverId === 'DRV-001';
+  const isPrimaryDriver = status.driverId === 'DRV-001' || status.source === 'live';
   const [useUsbCamera, setUseUsbCamera] = useState(false);
   const [usbError, setUsbError] = useState<string | null>(null);
+  const [camStatus, setCamStatus] = useState<'stopped' | 'connecting' | 'live' | 'permission_denied' | 'error'>('stopped');
+  const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(null);
+  const [frameCount, setFrameCount] = useState(0);
   const [buzzerTriggered, setBuzzerTriggered] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -62,24 +66,67 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     };
   }, [status.drowsinessLevel, status.eyeState, status.phoneUseStatus, status.yawnStatus, status.distractionStatus]);
 
+  // Handle camera permission and MediaStream acquisition
   const startUsbCamera = async () => {
     try {
       setUsbError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
+      setCamStatus('connecting');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera access requires HTTPS or localhost context in browser');
       }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 15 },
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
       setUseUsbCamera(true);
+      setCamStatus('live');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to open USB camera';
+      let msg = 'Failed to open camera stream';
+      if (err instanceof DOMException) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          msg = 'Camera permission denied. Please enable camera access in browser site settings.';
+          setCamStatus('permission_denied');
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          msg = 'No camera or webcam device found on this machine.';
+          setCamStatus('error');
+        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          msg = 'Camera is occupied by another app (e.g., Zoom, Teams). Please close it and retry.';
+          setCamStatus('error');
+        } else {
+          msg = `Camera error: ${err.message}`;
+          setCamStatus('error');
+        }
+      } else if (err instanceof Error) {
+        msg = err.message;
+        setCamStatus('error');
+      }
       setUsbError(msg);
       setUseUsbCamera(false);
     }
   };
+
+  // Safely attach streamRef to videoRef once video element mounts in DOM
+  useEffect(() => {
+    if (!useUsbCamera || !streamRef.current) return;
+
+    const video = videoRef.current;
+    if (video) {
+      video.srcObject = streamRef.current;
+      video.play().then(() => {
+        setCamStatus('live');
+      }).catch(() => {
+        // Browser autoplay restriction handling
+      });
+    }
+  }, [useUsbCamera]);
 
   const stopUsbCamera = () => {
     if (streamRef.current) {
@@ -90,8 +137,12 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
       videoRef.current.srcObject = null;
     }
     setUseUsbCamera(false);
+    setCamStatus('stopped');
+    setVideoResolution(null);
+    setFrameCount(0);
   };
 
+  // Frame processing and upload loop when USB camera is active
   useEffect(() => {
     if (!useUsbCamera) return;
 
@@ -111,20 +162,21 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
           async (blob) => {
             if (!blob || !isStreaming) return;
             try {
-              await fetch('http://127.0.0.1:8000/api/monitoring/camera-frame', {
+              await fetch(`${API_BASE_URL}/monitoring/camera-frame`, {
                 method: 'POST',
                 body: blob,
                 headers: { 'Content-Type': 'image/jpeg' },
               });
+              setFrameCount((prev) => prev + 1);
             } catch {
-              // Frame dropped or server busy
+              // Frame dropped or server offline
             }
           },
           'image/jpeg',
           0.7
         );
       } catch {
-        // Video read glitch
+        // Video render glitch
       }
     }, 70); // ~14 FPS
 
@@ -134,6 +186,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     };
   }, [useUsbCamera]);
 
+  // Clean up media tracks on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -145,72 +198,77 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
   return (
     <div
       className={`bg-surface border rounded-lg overflow-hidden flex flex-col transition-all ${
-        isPrimaryLive ? 'border-primary ring-2 ring-primary/20 shadow-md' : 'border-border'
+        isPrimaryDriver ? 'border-primary ring-2 ring-primary/20 shadow-md' : 'border-border'
       }`}
     >
       <div className="aspect-video bg-surface-inset flex items-center justify-center relative overflow-hidden">
-        {isPrimaryLive ? (
-          useUsbCamera ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <img
-              src="http://127.0.0.1:8000/api/monitoring/video-feed"
-              alt="Live In-Cab Camera Feed"
-              className="w-full h-full object-cover"
-            />
-          )
+        {useUsbCamera ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              setVideoResolution({ width: v.videoWidth, height: v.videoHeight });
+              setCamStatus('live');
+            }}
+            className="w-full h-full object-cover bg-black"
+          />
+        ) : isPrimaryDriver && status.source === 'live' ? (
+          <img
+            src={`${API_BASE_URL}/monitoring/video-feed`}
+            alt="Live In-Cab Camera Feed"
+            className="w-full h-full object-cover bg-black"
+            onError={() => setUsbError('Backend video stream unavailable. Click "Use USB / Laptop Camera" below.')}
+          />
         ) : (
-          <Camera size={28} className="text-text-muted" />
+          <Camera size={32} className="text-text-muted opacity-40" />
         )}
-        <span className="absolute top-2 left-2 text-[10px] font-medium bg-black/70 text-white px-2 py-0.5 rounded flex items-center gap-1.5 shadow-sm">
-          {isPrimaryLive ? (
-            useUsbCamera ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-status-success-text animate-pulse" />
-                USB / WEBCAM ACTIVE
-              </>
-            ) : status.cameraStatus === 'error' ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-status-danger-text" />
-                CAMERA OFFLINE
-              </>
-            ) : status.cameraStatus === 'reconnecting' ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-status-warning-text animate-ping" />
-                RECONNECTING CAMERA
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-status-danger-text animate-pulse" />
-                PRIMARY MONITORED DRIVER
-              </>
-            )
+
+        {/* Video Overlay Diagnostics Badge */}
+        <span className="absolute top-2 left-2 text-[10px] font-medium bg-black/75 text-white px-2 py-0.5 rounded flex items-center gap-1.5 shadow-sm backdrop-blur-xs">
+          {useUsbCamera ? (
+            <>
+              <span className={`w-2 h-2 rounded-full ${camStatus === 'live' ? 'bg-status-success-text animate-pulse' : 'bg-status-warning-text'}`} />
+              USB WEBCAM {camStatus.toUpperCase()} {videoResolution ? `(${videoResolution.width}x${videoResolution.height})` : ''}
+            </>
+          ) : isPrimaryDriver && status.source === 'live' ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-status-success-text animate-pulse" />
+              BACKEND CAMERA FEED
+            </>
           ) : status.isOnline ? (
-            'SIMULATED'
+            <>
+              <span className="w-2 h-2 rounded-full bg-status-info-text" />
+              SIMULATED TELEMETRY
+            </>
           ) : (
             'NO SIGNAL'
           )}
         </span>
+
         <span
           className={`absolute top-2 right-2 w-2 h-2 rounded-full ${status.isOnline ? 'bg-status-success-text' : 'bg-status-danger-text'}`}
         />
       </div>
 
-      {isPrimaryLive && (
-        <div className="px-4 pt-2.5 pb-1 flex items-center justify-between border-b border-border bg-surface-muted/30">
-          <span className="text-[11px] text-text-muted">
-            {useUsbCamera ? 'Streaming from USB/Laptop webcam' : 'Listening for DroidCam / IP stream'}
-          </span>
+      {/* Camera Diagnostics & Controls Toolbar */}
+      {isPrimaryDriver && (
+        <div className="px-3 py-2 flex items-center justify-between border-b border-border bg-surface-muted/40 text-[11px]">
+          <div className="flex items-center gap-1.5 text-text-muted">
+            {useUsbCamera && frameCount > 0 ? (
+              <span className="text-status-success-text flex items-center gap-1">
+                <Activity size={12} className="animate-spin" /> AI Ingestion Active ({frameCount} frames)
+              </span>
+            ) : (
+              <span>{useUsbCamera ? 'Webcam active' : 'Click to stream local laptop/USB webcam'}</span>
+            )}
+          </div>
           <button
             type="button"
             onClick={useUsbCamera ? stopUsbCamera : startUsbCamera}
-            className={`text-[11px] font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
+            className={`font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
               useUsbCamera
                 ? 'bg-status-danger-bg text-status-danger-text border border-status-danger-border hover:bg-status-danger-bg/80'
                 : 'bg-primary text-white hover:bg-primary/90'
@@ -218,7 +276,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
           >
             {useUsbCamera ? (
               <>
-                <VideoOff size={12} /> Stop USB Camera
+                <VideoOff size={12} /> Stop Camera
               </>
             ) : (
               <>
@@ -229,9 +287,13 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
         </div>
       )}
 
+      {/* Human Readable User Error Messages */}
       {usbError && (
-        <div className="px-4 py-1.5 text-[11px] bg-status-danger-bg text-status-danger-text border-b border-status-danger-border">
-          {usbError}
+        <div className="px-4 py-2 text-[11px] bg-status-danger-bg text-status-danger-text border-b border-status-danger-border font-medium flex items-center justify-between">
+          <span>{usbError}</span>
+          <button type="button" onClick={() => setUsbError(null)} className="text-xs underline ml-2 cursor-pointer">
+            Dismiss
+          </button>
         </div>
       )}
       <div className="p-4 flex-1 flex flex-col">

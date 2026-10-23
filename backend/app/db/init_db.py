@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.db.migrations import run_migrations
 from app.db.session import Base, SessionLocal, engine
 from app.models import (
     Alert,
@@ -230,6 +231,7 @@ def seed_all() -> None:
 
 
 def init_db() -> None:
+    run_migrations(engine)
     create_tables()
     seed_all()
 
