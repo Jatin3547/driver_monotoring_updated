@@ -3,7 +3,7 @@ import { Camera, Eye, Moon, Smartphone, User, UserX, Video, VideoOff, Volume2, V
 import { Badge } from '@/components/ui/Badge';
 import { monitoringSignalTone } from '@/utils/statusColors';
 import { timeAgo } from '@/utils/formatDate';
-import { playImmediateDriverWarning, isAudioMuted } from '@/utils/audioAlert';
+import { startContinuousAlarm, stopContinuousAlarm, isAudioMuted } from '@/utils/audioAlert';
 import { API_BASE_URL } from '@/services/config';
 import type { Driver, DriverMonitoringStatus, Vehicle } from '@/types';
 
@@ -32,39 +32,54 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Trigger in-cab acoustic buzzer when critical conditions arise
+  // Continuous in-cab acoustic wake-up buzzer alarm:
+  // Keeps beeping non-stop until the driver wakes up / opens eyes, puts phone down, or looks straight!
   useEffect(() => {
-    const isCritical =
-      status.drowsinessLevel === 'critical' ||
-      status.eyeState === 'critical' ||
-      status.phoneUseStatus === 'critical';
+    if (!isPrimaryDriver) {
+      stopContinuousAlarm();
+      setBuzzerTriggered(false);
+      return;
+    }
 
-    const isWarning =
-      status.yawnStatus === 'warning' ||
+    const isEyesClosed =
+      status.drowsinessLevel === 'critical' ||
+      status.drowsinessLevel === 'warning' ||
+      status.eyeState === 'critical' ||
+      status.eyeState === 'warning';
+
+    const isPhoneUse =
+      status.phoneUseStatus === 'critical' ||
+      status.phoneUseStatus === 'warning';
+
+    const isDistracted =
+      status.distractionStatus === 'critical' ||
       status.distractionStatus === 'warning';
 
-    let resetTimer: ReturnType<typeof setTimeout> | null = null;
-    let triggerTimer: ReturnType<typeof setTimeout> | null = null;
+    const shouldAlarm = isEyesClosed || isPhoneUse || isDistracted;
 
-    if (isCritical) {
-      const sounded = playImmediateDriverWarning('critical');
-      if (sounded) {
-        triggerTimer = setTimeout(() => setBuzzerTriggered(true), 0);
-        resetTimer = setTimeout(() => setBuzzerTriggered(false), 2500);
-      }
-    } else if (isWarning) {
-      const sounded = playImmediateDriverWarning('warning');
-      if (sounded) {
-        triggerTimer = setTimeout(() => setBuzzerTriggered(true), 0);
-        resetTimer = setTimeout(() => setBuzzerTriggered(false), 2000);
-      }
+    if (shouldAlarm) {
+      setBuzzerTriggered(true);
+      const reason = isEyesClosed
+        ? 'eyes_closed'
+        : isPhoneUse
+        ? 'phone_use'
+        : 'distraction';
+      startContinuousAlarm(reason);
+    } else {
+      setBuzzerTriggered(false);
+      stopContinuousAlarm();
     }
 
     return () => {
-      if (triggerTimer) clearTimeout(triggerTimer);
-      if (resetTimer) clearTimeout(resetTimer);
+      stopContinuousAlarm();
     };
-  }, [status.drowsinessLevel, status.eyeState, status.phoneUseStatus, status.yawnStatus, status.distractionStatus]);
+  }, [
+    isPrimaryDriver,
+    status.drowsinessLevel,
+    status.eyeState,
+    status.phoneUseStatus,
+    status.distractionStatus,
+  ]);
 
   // Handle camera permission and MediaStream acquisition
   const startUsbCamera = async () => {
@@ -224,6 +239,21 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
           />
         ) : (
           <Camera size={32} className="text-text-muted opacity-40" />
+        )}
+
+        {/* Pulsing Alarm Banner when Continuous Wake-Up Buzzer is Active */}
+        {buzzerTriggered && isPrimaryDriver && (
+          <div className="absolute top-0 left-0 right-0 bg-red-600 text-white text-[11px] font-bold py-1 px-3 flex items-center justify-between shadow-lg animate-pulse z-30">
+            <span className="flex items-center gap-1.5 tracking-wide">
+              <AlertTriangle size={13} className="text-yellow-300 animate-bounce" />
+              {status.eyeState === 'critical' || status.drowsinessLevel === 'critical' || status.eyeState === 'warning'
+                ? '🚨 SLEEP DETECTED / EYES CLOSED — WAKE UP!'
+                : status.phoneUseStatus === 'critical' || status.phoneUseStatus === 'warning'
+                ? '📱 PHONE USE DETECTED — PUT PHONE DOWN!'
+                : '⚠️ DRIVER DISTRACTED — LOOK AT ROAD!'}
+            </span>
+            <span className="text-[10px] bg-black/40 px-1.5 py-0.5 rounded uppercase">ALARM ACTIVE</span>
+          </div>
         )}
 
         {/* Video Overlay Diagnostics Badge */}

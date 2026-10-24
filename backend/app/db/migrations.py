@@ -45,6 +45,7 @@ def migrate_sqlite_db_path(db_path: str) -> None:
                     cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type};")
                     if indexed:
                         cursor.execute(f"CREATE INDEX IF NOT EXISTS ix_{table_name}_{col_name} ON {table_name} ({col_name});")
+        cursor.close()
         conn.commit()
     finally:
         conn.close()
@@ -56,10 +57,10 @@ def run_migrations(engine: Any = None) -> None:
         try:
             from sqlalchemy import inspect, text
 
-            inspector = inspect(engine)
-            existing_tables = set(inspector.get_table_names())
+            with engine.connect() as conn:
+                inspector = inspect(conn)
+                existing_tables = set(inspector.get_table_names())
 
-            with engine.begin() as conn:
                 for table_name, columns in MIGRATION_SCHEMA.items():
                     if table_name not in existing_tables:
                         continue
@@ -80,11 +81,12 @@ def run_migrations(engine: Any = None) -> None:
                                 conn.execute(
                                     text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name} ({col_name})")
                                 )
+                conn.commit()
             return
         except Exception as e:
             logger.warning("SQLAlchemy migration fallback to sqlite3: %s", e)
 
-    # Direct sqlite3 fallback
+    # Direct sqlite3 fallback using configured database or relative default
     default_db_path = os.path.join(os.path.dirname(__file__), "..", "..", "fleet.db")
     migrate_sqlite_db_path(os.path.abspath(default_db_path))
 

@@ -251,8 +251,9 @@ def select_driver_face(
     best_score = -1.0
 
     for face in multi_face_landmarks:
-        xs = [pt.x for pt in face.landmark]
-        ys = [pt.y for pt in face.landmark]
+        pts = face.landmark if hasattr(face, 'landmark') else face
+        xs = [pt.x for pt in pts]
+        ys = [pt.y for pt in pts]
 
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)

@@ -4,6 +4,6 @@
 #
 #   pip install -r requirements-ai.txt
 #
-opencv-python==4.10.0.84
-mediapipe==0.10.18
-ultralytics==8.3.55
+opencv-python>=4.10.0.84
+mediapipe>=0.10.30
+ultralytics>=8.3.55

@@ -8,7 +8,7 @@ import { MonitoringStatusGrid } from '@/components/monitoring/MonitoringStatusGr
 import { EventTimeline } from '@/components/monitoring/EventTimeline';
 import { LoadingState, ErrorState } from '@/components/ui/States';
 import { Camera, Radio, Volume2, VolumeX, BellRing } from 'lucide-react';
-import { playImmediateDriverWarning, isAudioMuted, setAudioMuted } from '@/utils/audioAlert';
+import { playImmediateDriverWarning, isAudioMuted, setAudioMuted, stopContinuousAlarm } from '@/utils/audioAlert';
 import type { DriverMonitoringStatus, MonitoringEvent } from '@/types';
 
 export default function MonitoringPage() {
@@ -26,7 +26,10 @@ export default function MonitoringPage() {
   useEffect(() => {
     const handleSettingsChanged = () => setAudioMutedState(isAudioMuted());
     window.addEventListener('fleetguard_audio_settings_changed', handleSettingsChanged);
-    return () => window.removeEventListener('fleetguard_audio_settings_changed', handleSettingsChanged);
+    return () => {
+      window.removeEventListener('fleetguard_audio_settings_changed', handleSettingsChanged);
+      stopContinuousAlarm();
+    };
   }, []);
 
   const statuses = liveStatuses ?? initialStatuses ?? [];
@@ -56,18 +59,15 @@ export default function MonitoringPage() {
       return [event, ...base].slice(0, 50);
     });
 
-    // Immediate acoustic in-cab warning
-    if (event.severity === 'high') {
+    // Acoustic wake-up buzzer ONLY for live driver on: distraction, phone use, or eyes closed / drowsiness
+    const isLiveTarget = event.driverId === 'DRV-001' || event.source === 'live';
+    const isTargetEvent = ['drowsiness', 'eye_closure', 'distraction', 'phone_use'].includes(event.type);
+
+    if (isLiveTarget && isTargetEvent) {
       const sounded = playImmediateDriverWarning('critical');
       if (sounded) {
-        setLastBeepMessage(`Critical warning beep sounded for ${event.type.replace('_', ' ')}`);
-        setTimeout(() => setLastBeepMessage(null), 4000);
-      }
-    } else if (event.severity === 'medium') {
-      const sounded = playImmediateDriverWarning('warning');
-      if (sounded) {
-        setLastBeepMessage(`Warning chime sounded for ${event.type.replace('_', ' ')}`);
-        setTimeout(() => setLastBeepMessage(null), 4000);
+        setLastBeepMessage(`Wake-up alarm sounded: ${event.type.replace('_', ' ').toUpperCase()}`);
+        setTimeout(() => setLastBeepMessage(null), 3500);
       }
     }
   });
