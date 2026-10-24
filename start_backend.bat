@@ -3,24 +3,35 @@ echo ========================================================
 echo  FLEETGUARD - Starting Backend Server
 echo ========================================================
 
+cd /d "%~dp0\backend"
+
+if exist "venv313\Scripts\python.exe" (
+    echo [INFO] Found backend venv313 virtual environment.
+    .\venv313\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+    goto end
+)
+
+if exist "venv\Scripts\python.exe" (
+    echo [INFO] Found backend venv virtual environment.
+    .\venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+    goto end
+)
+
 where python >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
-    echo [INFO] Found Windows Python. Starting Uvicorn on Windows...
-    cd /d "%~dp0\backend"
-    python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    echo [INFO] Starting Uvicorn using system Python...
+    python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
     goto end
 )
 
 where py >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
-    echo [INFO] Found Windows py launcher. Starting Uvicorn on Windows...
-    cd /d "%~dp0\backend"
-    py -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    echo [INFO] Starting Uvicorn using py launcher...
+    py -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
     goto end
 )
 
-echo [INFO] Windows Python not found in PATH.
-echo [INFO] Starting FastAPI backend via WSL Ubuntu environment...
-wsl -d Ubuntu -e bash -c "cd /mnt/d/fleetmanagement/backend && PYTHONPATH=. ~/.venvs/fleet/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+echo [ERROR] Python not found. Please install Python 3.10+ and add it to PATH.
+pause
 
 :end

@@ -17,6 +17,7 @@ export interface MonitoringEvent {
   timestamp: string; // ISO datetime
   confidence: number; // 0-1, populated by AI model in Phase 3
   snapshotUrl?: string;
+  source?: 'live' | 'simulation' | string;
 }
 
 export type MonitoringSignalStatus = 'normal' | 'warning' | 'critical' | 'no-signal';
@@ -31,13 +32,13 @@ export interface DriverMonitoringStatus {
   yawnStatus: MonitoringSignalStatus;
   phoneUseStatus: MonitoringSignalStatus;
   distractionStatus: MonitoringSignalStatus;
-  lastUpdated: string; // ISO datetime
-  source?: string;
-  cameraStatus?: string;
-  aiHealth?: string;
+  lastUpdated: string;
+  source?: 'simulation' | 'live';
   metrics?: {
-    ear?: number;
-    mar?: number;
-    headYaw?: number;
+    ear: number;
+    mar: number;
+    headYaw: number;
   };
+  cameraStatus?: 'active' | 'disconnected' | 'reconnecting' | 'simulated' | 'stopped';
+  aiHealth?: 'healthy' | 'degraded';
 }
