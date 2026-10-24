@@ -20,3 +20,6 @@ python-multipart==0.0.20
 # WebSockets (already pulled in by uvicorn[standard], listed explicitly
 # for clarity since Phase F depends on it directly)
 websockets==14.1
+
+# Incident Video Evidence (Phase 3 genuine MP4 transcoding & validation)
+imageio-ffmpeg>=0.5.1

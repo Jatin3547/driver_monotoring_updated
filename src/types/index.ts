@@ -6,4 +6,4 @@ export * from './gps';
 export * from './incident';
 export * from './analytics';
 export * from './trip';
-
+export * from './evidence';

@@ -43,6 +43,7 @@ from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.gps.simulator import record_position
 from app.models import Driver, SafetyEvent, Vehicle
+from app.services.evidence_manager import run_retention_cleanup
 from app.services.safety_engine import process_detection
 from app.services.serializers import (
     alert_to_dict,
@@ -70,6 +71,13 @@ async def _broadcast_loop() -> None:
             continue
         db = SessionLocal()
         try:
+            # Retention cleanup every ~5 minutes (600 ticks of 0.5s)
+            if tick % 600 == 0:
+                try:
+                    run_retention_cleanup(db)
+                except Exception as cleanup_exc:
+                    logger.warning("Periodic retention cleanup: %s", cleanup_exc)
+
             # --- GPS (runs every 5s = every 10 ticks of 0.5s) ---
             if tick % 10 == 0:
                 vehicles = [v for v in db.query(Vehicle).all() if v.status not in _TRACKABLE_STATUSES_EXCLUDE]
@@ -122,8 +130,6 @@ async def _broadcast_loop() -> None:
 
                 for detection in detections:
                     result = process_detection(db, driver, vehicle, detection)
-                    driver_map = {driver.id: driver.code}
-                    vehicle_map = {vehicle.id: vehicle.code}
                     await manager.broadcast(
                         "safety_event",
                         safety_event_to_dict(result["event"], driver.code, vehicle.code),
@@ -148,6 +154,12 @@ async def _broadcast_loop() -> None:
 async def lifespan(app: FastAPI):
     logger.info("Initializing database (%s)...", settings.database_url)
     init_db()
+    with SessionLocal() as db_cleanup:
+        try:
+            run_retention_cleanup(db_cleanup)
+        except Exception as e:
+            logger.warning("Startup retention cleanup: %s", e)
+
     logger.info("Database ready. AI_MODE=%s GPS_MODE=%s", settings.ai_mode, settings.gps_mode)
     task = asyncio.create_task(_broadcast_loop())
     try:

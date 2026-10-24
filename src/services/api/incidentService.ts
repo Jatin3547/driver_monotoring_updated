@@ -31,3 +31,17 @@ export async function updateIncidentStatus(
   });
 }
 
+export async function deleteIncident(
+  incidentId: string
+): Promise<{ ok: boolean; id: string; message?: string }> {
+  if (USE_MOCK_DATA) {
+    const idx = mockIncidents.findIndex((i) => i.id === incidentId);
+    if (idx !== -1) {
+      mockIncidents.splice(idx, 1);
+    }
+    return mockDelay({ ok: true, id: incidentId });
+  }
+  return apiClient.delete<{ ok: boolean; id: string; message?: string }>(
+    `/incidents/${incidentId}`
+  );
+}

@@ -6,3 +6,5 @@ __pycache__/
 *.bak
 *.bak_*
 *.db.bak*
+data/evidence/*
+!data/evidence/.gitkeep

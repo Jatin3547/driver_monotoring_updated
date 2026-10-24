@@ -1,3 +1,4 @@
+from pathlib import Path
 """Centralized application configuration.
 
 All environment-dependent values are read here, once, via pydantic-settings.
@@ -55,6 +56,13 @@ class Settings(_BaseSettings):
     ai_phone_confidence_threshold: float = 0.35
     ai_phone_usage_duration_seconds: float = 1.5
     ai_phone_warning_duration_seconds: float = 0.6
+
+    # Evidence Storage & Retention (Phase 3)
+    evidence_storage_dir: str = str(Path(__file__).resolve().parent.parent.parent / "data" / "evidence")
+    evidence_max_storage_mb: int = 500
+    evidence_retention_days: int = 7
+    evidence_reserved_recording_mb: int = 25
+    ffmpeg_path: str = ""
 
     environment: str = "development"
 

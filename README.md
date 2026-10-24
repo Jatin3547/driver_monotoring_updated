@@ -4,6 +4,7 @@ An AI-assisted driver monitoring and intelligent fleet management platform featu
 - **Real-Time Computer Vision Driver Monitoring**: In-cab eye closure (EAR), drowsiness, yawning (MAR), head distraction (3D pose yaw), and mobile phone use detection (YOLOv8) via built-in laptop webcam or DroidCam.
 - **Continuous In-Cab Acoustic Buzzer**: High-urgency acoustic alarm that beeps continuously when the driver closes their eyes, is distracted, or uses a phone until they wake up / return attention to the road.
 - **Interactive Fleet Operations Dashboard**: Live vehicle telemetry, GPS map tracking, automated incident & alert escalation, and safety leaderboards built with React, Vite, Tailwind CSS, and Leaflet.
+- **Incident Video Evidence Pipeline (Phase 3)**: Automatic rolling 5s pre-event + 10s post-event browser webcam recording (~15s clip) for qualifying safety events (Phone use, Drowsiness, Distraction), transcoded to genuine seekable MP4 via FFmpeg, with snapshot capture, SHA-256 cryptographic verification, 500 MB quota enforcement, and 7-day retention janitor.
 - **FastAPI Real-Time Backend**: SQLite/PostgreSQL with automatic schema migrations, JWT auth, and WebSocket broadcasting.
 
 ---

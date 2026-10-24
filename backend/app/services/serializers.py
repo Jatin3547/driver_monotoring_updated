@@ -56,6 +56,11 @@ def vehicle_to_dict(v: Vehicle) -> dict:
 
 def incident_to_dict(i: Incident, driver: Driver | None, vehicle: Vehicle | None) -> dict:
     evidence_id = i.evidence.id if hasattr(i, "evidence") and i.evidence else None
+    snapshot_url = (
+        f"/api/evidence/{evidence_id}/snapshot"
+        if (evidence_id and getattr(i.evidence, "snapshot_path", None))
+        else (f"/api/evidence/{evidence_id}/download" if evidence_id else None)
+    )
     return {
         "id": i.id,
         "driverId": driver.code if driver else i.driver_id,
@@ -69,7 +74,7 @@ def incident_to_dict(i: Incident, driver: Driver | None, vehicle: Vehicle | None
         "location": i.location,
         "description": i.description,
         "acknowledgedBy": i.acknowledged_by,
-        "snapshotUrl": f"/api/evidence/{evidence_id}/download" if evidence_id else None,
+        "snapshotUrl": snapshot_url,
     }
 
 
@@ -107,8 +112,15 @@ def evidence_to_dict(e, driver_code: str | None = None, vehicle_code: str | None
         "postEventSeconds": e.post_event_seconds,
         "retentionDays": e.retention_days,
         "isProtected": e.is_protected,
+        "status": getattr(e, "status", "available") or "available",
+        "errorMessage": getattr(e, "error_message", None),
+        "sha256Hash": getattr(e, "sha256_hash", None),
+        "cloudUploadStatus": getattr(e, "cloud_upload_status", "pending") or "pending",
         "createdAt": _iso(e.created_at),
+        "eventTimestamp": _iso(e.event_timestamp) if getattr(e, "event_timestamp", None) else None,
         "downloadUrl": f"/api/evidence/{e.id}/download",
+        "streamUrl": f"/api/evidence/{e.id}/stream",
+        "snapshotUrl": f"/api/evidence/{e.id}/snapshot" if getattr(e, "snapshot_path", None) else None,
     }
 
 

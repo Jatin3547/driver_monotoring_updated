@@ -36,15 +36,27 @@ class Evidence(Base):
     file_path: Mapped[str] = mapped_column(String, nullable=False)
     file_type: Mapped[str] = mapped_column(String, default="video/mp4")  # video/mp4 | image/jpeg
     file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    duration_seconds: Mapped[float | None] = mapped_column(Float, default=8.0)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, default=15.0)
     pre_event_seconds: Mapped[float] = mapped_column(Float, default=5.0)
-    post_event_seconds: Mapped[float] = mapped_column(Float, default=3.0)
-    retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    post_event_seconds: Mapped[float] = mapped_column(Float, default=10.0)
+    retention_days: Mapped[int] = mapped_column(Integer, default=7)
     is_protected: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
+    # Phase 3 Fields
+    snapshot_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    sha256_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="available", index=True)  # pending | available | failed | expired
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
+    cloud_upload_status: Mapped[str] = mapped_column(String, default="pending")  # pending | uploading | uploaded | failed | not_applicable
+    event_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recording_start_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recording_end_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
     incident: Mapped["Incident"] = relationship(back_populates="evidence")
     driver: Mapped["Driver"] = relationship()
     vehicle: Mapped["Vehicle"] = relationship()

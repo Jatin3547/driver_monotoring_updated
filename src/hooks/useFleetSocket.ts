@@ -4,7 +4,14 @@ import { API_BASE_URL } from '@/services/config';
 export type WebSocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 export interface FleetSocketMessage<T = unknown> {
-  type: 'gps_update' | 'monitoring_update' | 'safety_event' | 'incident_created' | 'alert_created';
+  type:
+    | 'gps_update'
+    | 'monitoring_update'
+    | 'safety_event'
+    | 'incident_created'
+    | 'incident_deleted'
+    | 'evidence_uploaded'
+    | 'alert_created';
   payload: T;
 }
 
@@ -50,32 +57,35 @@ export function useFleetSocket(enabled: boolean) {
     closedByUsRef.current = false;
 
     function connect() {
-      setStatus((prev) => (prev === 'disconnected' ? 'connecting' : 'reconnecting'));
-      let socket: WebSocket;
-      try {
-        socket = new WebSocket(wsUrl());
-      } catch {
-        setStatus('disconnected');
+      if (closedByUsRef.current) {
         return;
       }
-      socketRef.current = socket;
 
-      socket.onopen = () => setStatus('connected');
+      setStatus('connecting');
+      const ws = new WebSocket(wsUrl());
+      socketRef.current = ws;
 
-      socket.onmessage = (event) => {
+      ws.onopen = () => {
+        setStatus('connected');
+      };
+
+      ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data) as FleetSocketMessage;
-          listenersRef.current.forEach((listener) => listener(message));
+          const parsed = JSON.parse(event.data) as FleetSocketMessage;
+          for (const listener of listenersRef.current) {
+            listener(parsed);
+          }
         } catch {
-          // Ignore malformed frames rather than crash the app.
+          // Non-JSON message from server — ignore.
         }
       };
 
-      socket.onerror = () => {
-        // onclose fires right after; reconnection is handled there.
+      ws.onerror = () => {
+        // onerror is always followed by onclose, so reconnection is handled there.
       };
 
-      socket.onclose = () => {
+      ws.onclose = () => {
+        socketRef.current = null;
         if (closedByUsRef.current) {
           setStatus('disconnected');
           return;
@@ -89,9 +99,14 @@ export function useFleetSocket(enabled: boolean) {
 
     return () => {
       closedByUsRef.current = true;
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      socketRef.current?.close();
-      socketRef.current = null;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+      setStatus('disconnected');
     };
   }, [enabled]);
 

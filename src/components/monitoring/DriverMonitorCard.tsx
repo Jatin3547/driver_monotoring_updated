@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/Badge';
 import { monitoringSignalTone } from '@/utils/statusColors';
 import { timeAgo } from '@/utils/formatDate';
 import { startContinuousAlarm, stopContinuousAlarm, isAudioMuted } from '@/utils/audioAlert';
+import { useFleetSocketEvent } from '@/hooks/useFleetSocketEvent';
+import { useIncidentRecorder } from '@/hooks/useIncidentRecorder';
 import { API_BASE_URL } from '@/services/config';
 import type { Driver, DriverMonitoringStatus, Vehicle } from '@/types';
 
@@ -31,6 +33,23 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
   const [buzzerTriggered, setBuzzerTriggered] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+
+  const {
+    recorderState,
+    recordingSecondsLeft,
+    triggerIncidentRecording,
+  } = useIncidentRecorder({
+    stream: mediaStream,
+    videoRef,
+    driverId: status.driverId,
+  });
+
+  useFleetSocketEvent<{ id: string; driverId: string }>('incident_created', (inc) => {
+    if (isPrimaryDriver && (inc.driverId === status.driverId || status.driverId === 'DRV-001')) {
+      triggerIncidentRecording(inc.id, inc.driverId);
+    }
+  });
 
   // Continuous in-cab acoustic wake-up buzzer alarm:
   // Keeps beeping non-stop until the driver wakes up / opens eyes, puts phone down, or looks straight!
@@ -101,6 +120,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
       });
 
       streamRef.current = stream;
+      setMediaStream(stream);
       setUseUsbCamera(true);
       setCamStatus('live');
     } catch (err: unknown) {
@@ -143,6 +163,14 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     }
   }, [useUsbCamera]);
 
+  // Auto-start camera on mount for active live driver to engage 5s rolling buffer
+  useEffect(() => {
+    if (isPrimaryDriver && !useUsbCamera && camStatus === 'stopped') {
+      startUsbCamera();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPrimaryDriver]);
+
   const stopUsbCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -151,6 +179,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setMediaStream(null);
     setUseUsbCamera(false);
     setCamStatus('stopped');
     setVideoResolution(null);
@@ -277,6 +306,26 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
             'NO SIGNAL'
           )}
         </span>
+
+        {/* Evidence Recording Overlays */}
+        {recorderState === 'recording_incident' && (
+          <div className="absolute bottom-2 left-2 bg-red-600/90 text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 shadow animate-pulse z-20">
+            <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+            REC EVIDENCE CLIP ({recordingSecondsLeft}s)
+          </div>
+        )}
+        {recorderState === 'uploading' && (
+          <div className="absolute bottom-2 left-2 bg-blue-600/90 text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 shadow animate-pulse z-20">
+            <Activity size={10} className="animate-spin" />
+            SAVING MP4 EVIDENCE...
+          </div>
+        )}
+        {recorderState === 'buffering' && (
+          <div className="absolute bottom-2 left-2 bg-black/60 text-emerald-400 text-[9px] font-medium px-1.5 py-0.5 rounded flex items-center gap-1 z-10 backdrop-blur-xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            5s Rolling Buffer
+          </div>
+        )}
 
         <span
           className={`absolute top-2 right-2 w-2 h-2 rounded-full ${status.isOnline ? 'bg-status-success-text' : 'bg-status-danger-text'}`}

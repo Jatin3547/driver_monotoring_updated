@@ -58,7 +58,9 @@ def process_detection(
 
     result = {"event": event, "incident": None, "alert": None}
 
-    if detection.severity != "high":
+    # Only qualifying critical safety events escalate to Incident records requiring evidence
+    QUALIFYING_INCIDENT_TYPES = {"drowsiness", "eye_closure", "phone_use", "distraction"}
+    if detection.severity != "high" or detection.event_type not in QUALIFYING_INCIDENT_TYPES:
         db.commit()
         return result
 

@@ -2,8 +2,8 @@
 
 Performs idempotent schema migrations before application startup queries run.
 In particular, checks existing database tables for missing columns relative to
-the model definitions (e.g. adding missing `incidents.trip_id` column to older databases)
-without dropping or resetting tables or losing existing data.
+the model definitions (e.g. adding missing `incidents.trip_id` column to older databases
+and Phase 3 evidence columns) without dropping or resetting tables or losing existing data.
 """
 
 import logging
@@ -19,6 +19,17 @@ MIGRATION_SCHEMA: dict[str, list[tuple[str, str, bool, bool]]] = {
         ("trip_id", "VARCHAR", True, True),
         ("safety_event_id", "VARCHAR", True, False),
         ("acknowledged_by", "VARCHAR", True, False),
+    ],
+    "evidence": [
+        ("snapshot_path", "VARCHAR", True, False),
+        ("sha256_hash", "VARCHAR", True, False),
+        ("status", "VARCHAR", True, True),
+        ("error_message", "VARCHAR", True, False),
+        ("cloud_upload_status", "VARCHAR", True, False),
+        ("event_timestamp", "DATETIME", True, False),
+        ("recording_start_timestamp", "DATETIME", True, False),
+        ("recording_end_timestamp", "DATETIME", True, False),
+        ("expires_at", "DATETIME", True, False),
     ],
 }
 
