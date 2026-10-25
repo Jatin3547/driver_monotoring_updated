@@ -3,15 +3,16 @@
 Features:
 - Dedicated background thread continuously captures frames to prevent blocking the async FastAPI event loop.
 - Single-frame buffer pattern (always yields the freshest frame, zero latency accumulation).
+- Crash-proof HTTP/MJPEG stream reader for DroidCam / IP cameras bypassing libavformat demuxer C-assertions.
 - Bounded auto-reconnect with exponential backoff on frame read failures or disconnections.
-- Resource cleanup on shutdown (guaranteed cv2.VideoCapture release).
+- Resource cleanup on shutdown (guaranteed cv2.VideoCapture / socket release).
 - Low-CPU throttling conforming to target FPS.
 """
 
 import logging
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 logger = logging.getLogger("fleet.ai.camera")
 
@@ -20,6 +21,127 @@ try:
     OPENCV_AVAILABLE = True
 except ImportError:
     OPENCV_AVAILABLE = False
+
+
+class HTTPMJPEGVideoCapture:
+    """Thread-safe and crash-proof pure-Python MJPEG stream reader.
+
+    Used for HTTP/MJPEG network cameras (such as DroidCam Wi-Fi at http://192.168.0.4:4747/video).
+    Bypasses OpenCV's FFmpeg C-demuxer entirely, eliminating C assertions such as
+    'Assertion pkt->stream_index < (unsigned)s->nb_streams at libavformat/demux.c:571'.
+    """
+
+    def __init__(self, url: str, timeout: float = 2.5):
+        self.url = url
+        self.timeout = timeout
+        self._response = None
+        self._buffer = bytearray()
+        self._is_opened = False
+        self._width = 640
+        self._height = 480
+        self._fps = 15.0
+        self._lock = threading.Lock()
+        self._open()
+
+    def _open(self) -> bool:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                self.url,
+                headers={
+                    "User-Agent": "FLEETGUARD-DriverMonitor/1.0",
+                    "Accept": "*/*",
+                    "Connection": "keep-alive",
+                },
+            )
+            self._response = urllib.request.urlopen(req, timeout=self.timeout)
+            if self._response and getattr(self._response, "status", 200) in (200, 206):
+                self._is_opened = True
+                return True
+        except Exception as exc:
+            logger.debug("HTTPMJPEGVideoCapture failed to connect to %s: %s", self.url, exc)
+            self.release()
+        return False
+
+    def isOpened(self) -> bool:
+        return self._is_opened and self._response is not None
+
+    def read(self) -> Tuple[bool, Optional[object]]:
+        if not self.isOpened():
+            return False, None
+
+        chunk_size = 16384
+        max_buffer_size = 4 * 1024 * 1024
+
+        with self._lock:
+            try:
+                latest_frame = None
+
+                for _ in range(12):  # Bounded reads per tick
+                    while True:
+                        start = self._buffer.find(b"\xff\xd8")
+                        if start == -1:
+                            if len(self._buffer) > 2048:
+                                self._buffer = self._buffer[-1024:]
+                            break
+
+                        end = self._buffer.find(b"\xff\xd9", start + 2)
+                        if end == -1:
+                            break
+
+                        jpeg_data = self._buffer[start : end + 2]
+                        self._buffer = self._buffer[end + 2 :]
+                        latest_frame = jpeg_data
+
+                    if latest_frame is not None:
+                        import numpy as np
+                        frame = cv2.imdecode(np.frombuffer(latest_frame, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if frame is not None and frame.size > 0:
+                            self._height, self._width = frame.shape[:2]
+                            return True, frame
+                        latest_frame = None
+
+                    chunk = self._response.read(chunk_size)
+                    if not chunk:
+                        logger.warning("HTTP MJPEG stream returned EOF on %s", self.url)
+                        self.release()
+                        return False, None
+
+                    self._buffer.extend(chunk)
+                    if len(self._buffer) > max_buffer_size:
+                        self._buffer = self._buffer[-1048576:]
+
+            except Exception as exc:
+                logger.warning("HTTP MJPEG socket error on %s: %s", self.url, exc)
+                self.release()
+                return False, None
+
+        return False, None
+
+    def release(self) -> None:
+        with self._lock:
+            self._is_opened = False
+            if self._response is not None:
+                try:
+                    self._response.close()
+                except Exception:
+                    pass
+                self._response = None
+            self._buffer = bytearray()
+
+    def get(self, prop_id: int) -> float:
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return float(self._width)
+        if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return float(self._height)
+        if prop_id == cv2.CAP_PROP_FPS:
+            return float(self._fps)
+        return 0.0
+
+    def set(self, prop_id: int, value: float) -> bool:
+        if prop_id == cv2.CAP_PROP_FPS:
+            self._fps = float(value)
+        return True
 
 
 class CameraManager:
@@ -111,6 +233,8 @@ class CameraManager:
         """Injects an external frame (e.g. from browser webcam or USB bridge)."""
         now = time.time()
         with self._lock:
+            if self._cap is not None:
+                self._release_capture()
             self._latest_frame = frame
             self._latest_timestamp = now
             self._frame_count += 1
@@ -120,6 +244,29 @@ class CameraManager:
             self._frame_width = frame.shape[1] if hasattr(frame, "shape") else 640
             self._frame_height = frame.shape[0] if hasattr(frame, "shape") else 480
             self._last_injected_time = now
+
+    def release_hardware(self) -> None:
+        """Explicitly releases underlying cv2 VideoCapture hardware handle so browser can use it."""
+        with self._lock:
+            self._release_capture()
+            self._last_injected_time = time.time()
+            self._latest_frame = None
+            self._status = "active"
+            self._last_error = None
+            logger.info("Camera hardware explicitly released for browser/external access.")
+
+    def switch_source(self, new_source: object) -> None:
+        """Thread-safe camera switch: releases existing capture handle and re-targets candidate sources."""
+        with self._lock:
+            self._release_capture()
+            self.candidate_sources = self._parse_sources(new_source)
+            self.active_source = self.candidate_sources[0] if self.candidate_sources else new_source
+            self._latest_frame = None
+            self._reconnect_attempts = 0
+            self._last_injected_time = 0.0
+            self._status = "reconnecting"
+            self._last_error = None
+            logger.info("Camera successfully switched to target source: %s", self.active_source)
 
     def start(self) -> bool:
         """Start the background capture worker."""
@@ -164,7 +311,7 @@ class CameraManager:
             return True, self._latest_frame.copy(), self._latest_timestamp
 
     @staticmethod
-    def _is_network_reachable(url: str, timeout: float = 0.6) -> bool:
+    def _is_network_reachable(url: str, timeout: float = 1.0) -> bool:
         """Quick TCP probe to avoid 30s ffmpeg connect hangs on offline network cameras."""
         try:
             import socket
@@ -214,20 +361,25 @@ class CameraManager:
                     return False
             else:
                 source_str = str(source).strip()
-                if "://" in source_str:
-                    if not self._is_network_reachable(source_str, timeout=0.6):
+                if source_str.startswith("http://") or source_str.startswith("https://"):
+                    if not self._is_network_reachable(source_str, timeout=1.0):
+                        logger.debug("Network camera %s unreachable via TCP probe.", source_str)
                         return False
-                cap = cv2.VideoCapture(source_str)
+                    cap = HTTPMJPEGVideoCapture(source_str, timeout=3.0)
+                else:
+                    if "://" in source_str and not self._is_network_reachable(source_str, timeout=1.0):
+                        return False
+                    cap = cv2.VideoCapture(source_str)
 
             if not cap.isOpened():
                 cap.release()
                 return False
 
             # Configure resolution and FPS hints
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap.set(cv2.CAP_PROP_FPS, self.target_fps)
             try:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, self.target_fps)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
                 pass
@@ -268,7 +420,7 @@ class CameraManager:
         return False
 
     def _release_capture(self) -> None:
-        """Release underlying cv2 VideoCapture."""
+        """Release underlying cv2 VideoCapture or HTTPMJPEGVideoCapture."""
         if self._cap is not None:
             try:
                 self._cap.release()
@@ -284,8 +436,10 @@ class CameraManager:
 
         while self._running:
             now = time.time()
-            # If external frames (USB browser/bridge) are active, do not clash with cv2 capture
-            if self._last_injected_time and (now - self._last_injected_time) < 2.5:
+            # If external frames (USB browser/bridge) are active, release cv2 hardware capture and yield
+            if self._last_injected_time and (now - self._last_injected_time) < 4.0:
+                if self._cap is not None:
+                    self._release_capture()
                 time.sleep(target_interval)
                 continue
 
@@ -363,7 +517,8 @@ class CameraManager:
             # Network streams (e.g. DroidCam HTTP/RTSP) are already naturally paced by the phone's network transmission clock.
             # Adding artificial sleep causes network frames to queue up in the socket buffer, causing seconds of lag!
             # We only sleep for local webcam or video file replay.
-            is_network_stream = isinstance(self.camera_index, str) and ("://" in self.camera_index or "http" in self.camera_index)
+            current_source_str = str(self.active_source or self.camera_index)
+            is_network_stream = "://" in current_source_str or "http" in current_source_str
             if not is_network_stream:
                 elapsed = time.time() - start_time
                 sleep_time = target_interval - elapsed

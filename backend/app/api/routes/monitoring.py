@@ -14,9 +14,8 @@
 """
 
 from datetime import datetime, timezone
-
 import time
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -85,8 +84,104 @@ def monitoring_video_feed():
 
     return StreamingResponse(
         frame_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
+
+
+@router.get("/current-snapshot")
+def monitoring_current_snapshot():
+    """Returns freshest live JPEG camera frame for incident evidence snapshots."""
+    detector = get_detector()
+    frame_bytes = None
+    if detector and hasattr(detector, "get_latest_jpeg_frame"):
+        frame_bytes = detector.get_latest_jpeg_frame()
+    if not frame_bytes and detector and hasattr(detector, "camera"):
+        ok, frame, _ = detector.camera.get_latest_frame()
+        if ok and frame is not None:
+            import cv2
+            ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            if ret:
+                frame_bytes = buf.tobytes()
+
+    if frame_bytes:
+        return Response(
+            content=frame_bytes,
+            media_type="image/jpeg",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+            },
+        )
+    raise HTTPException(status_code=404, detail="No active camera frame available")
+
+
+@router.post("/release-camera")
+def release_camera():
+    """Explicitly releases any backend cv2 hardware capture lock so the browser can access it."""
+    detector = get_detector()
+    if detector and hasattr(detector, "camera") and hasattr(detector.camera, "release_hardware"):
+        detector.camera.release_hardware()
+        return {"ok": True, "message": "Camera hardware released successfully"}
+    return {"ok": True, "message": "No active hardware lock to release"}
+
+
+@router.get("/probe-network-camera")
+def probe_network_camera(url: str = "http://192.168.0.4:4747/video"):
+    """Quick probe to test if DroidCam Wi-Fi stream or IP camera is reachable on the local network."""
+    import socket
+    from urllib.parse import urlparse
+    host = "192.168.0.4"
+    port = 4747
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or "192.168.0.4"
+        port = parsed.port or (4747 if "4747" in url else 80)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            s.connect((host, port))
+            return {
+                "reachable": True,
+                "host": host,
+                "port": port,
+                "url": url,
+                "message": f"DroidCam endpoint at {host}:{port} is reachable and responding."
+            }
+    except Exception as exc:
+        return {
+            "reachable": False,
+            "host": host,
+            "port": port,
+            "url": url,
+            "message": f"Could not connect to {url}: {exc}. Ensure DroidCam is running on your phone and connected to the same Wi-Fi."
+        }
+
+
+@router.post("/select-source")
+async def select_camera_source(request: Request):
+    """Allows dynamically switching camera source in the backend (e.g. DroidCam Wi-Fi vs Laptop/USB webcam)."""
+    data = await request.json()
+    source_type = data.get("sourceType") or data.get("source", "")
+    url = data.get("url", "http://192.168.0.4:4747/video")
+
+    detector = get_detector()
+    if detector and hasattr(detector, "camera"):
+        if source_type in ("webcam", "browser_usb"):
+            detector.camera.release_hardware()
+            return {"ok": True, "sourceType": "webcam", "activeSource": "browser_usb"}
+        elif source_type in ("droidcam",) or "://" in str(source_type) or "://" in str(url):
+            target_url = url if source_type == "droidcam" else str(source_type)
+            detector.camera.switch_source(target_url)
+            return {"ok": True, "sourceType": "droidcam", "activeSource": target_url}
+        elif source_type:
+            detector.camera.switch_source(source_type)
+            return {"ok": True, "sourceType": "custom", "activeSource": str(source_type)}
+    return {"ok": False, "error": "Detector not active"}
 
 
 @router.post("/camera-frame")

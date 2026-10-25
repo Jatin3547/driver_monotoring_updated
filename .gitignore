@@ -32,3 +32,6 @@ backend/.env
 *.bak
 *.bak_*
 *.db.bak*
+
+*.backup*
+*.backup_*

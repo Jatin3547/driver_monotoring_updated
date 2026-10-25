@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { uploadIncidentEvidence } from '@/services/api/evidenceService';
+import { API_BASE_URL } from '@/services/config';
 
 interface UseIncidentRecorderProps {
   stream: MediaStream | null;
@@ -56,23 +57,33 @@ export function useIncidentRecorder({
     return 'video/webm';
   };
 
-  // Capture representative still JPEG frame from active video element
+  // Capture representative still JPEG frame from active video element or backend snapshot
   const captureStillSnapshot = useCallback((): Promise<Blob | null> => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2) return Promise.resolve(null);
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return Promise.resolve(null);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      return new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9);
-      });
-    } catch {
-      return Promise.resolve(null);
+    if (video && video.readyState >= 2) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          return new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9);
+          });
+        }
+      } catch {
+        // Fall back to backend snapshot endpoint below
+      }
     }
+
+    // Direct snapshot fallback from backend
+    return fetch(`${API_BASE_URL}/monitoring/current-snapshot`)
+      .then((res) => {
+        if (res.ok) return res.blob();
+        return null;
+      })
+      .catch(() => null);
   }, [videoRef]);
 
   // Start continuous rolling buffer when media stream is live
