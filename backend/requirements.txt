@@ -17,9 +17,13 @@ python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 python-multipart==0.0.20
 
-# WebSockets (already pulled in by uvicorn[standard], listed explicitly
-# for clarity since Phase F depends on it directly)
+# WebSockets
 websockets==14.1
 
 # Incident Video Evidence (Phase 3 genuine MP4 transcoding & validation)
 imageio-ffmpeg>=0.5.1
+
+# Computer Vision & Real Live AI Driver Monitoring
+opencv-python>=4.10.0.84
+mediapipe>=0.10.30
+ultralytics>=8.3.55

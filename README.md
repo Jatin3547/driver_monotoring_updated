@@ -59,20 +59,19 @@ Open a terminal in the `backend` folder:
 cd backend
 
 # Create Python virtual environment
-python -m venv venv
+python -m venv venv313
 
 # Activate virtual environment
-.\venv\Scripts\activate
+.\venv313\Scripts\activate
 
 # Upgrade pip
 python -m pip install --upgrade pip
 
-# Install core backend dependencies (FastAPI, Uvicorn, SQLAlchemy)
+# Install all backend dependencies (FastAPI, Uvicorn, OpenCV, MediaPipe, Ultralytics YOLO)
 pip install -r requirements.txt
-
-# Install AI & Computer Vision dependencies (OpenCV, MediaPipe, Ultralytics YOLO)
-pip install -r requirements-ai.txt
 ```
+
+*(Tip: Double-clicking `start_backend.bat` or `start_all.bat` from the root will automatically detect your environment, auto-create any missing `.env` files, and launch the server for you).*
 
 ---
 

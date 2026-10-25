@@ -1,7 +1,8 @@
 // Single source of truth for whether services return mock data or call the
-// real FastAPI backend. In Phase 1 this is always true; Phase 2 flips the
-// VITE_USE_MOCK env var without touching any component or page.
-export const USE_MOCK_DATA: boolean = import.meta.env.VITE_USE_MOCK !== 'false';
+// real FastAPI backend.
+// Default to REAL backend mode (USE_MOCK_DATA = false) unless VITE_USE_MOCK is explicitly 'true'.
+// This ensures that anyone cloning or pulling the project connects to the real AI driver monitoring backend out-of-the-box!
+export const USE_MOCK_DATA: boolean = import.meta.env.VITE_USE_MOCK === 'true';
 
 // Auto-detect API base URL:
 // In browser environments loaded over HTTPS (such as Google AI Studio, cloud previews),
