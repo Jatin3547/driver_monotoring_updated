@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from app.services.video_service import (
+    check_is_splash_or_static,
     convert_webm_to_mp4,
     extract_snapshot_from_video,
     get_ffmpeg_binary,
@@ -73,6 +74,30 @@ class TestVideoConversion(unittest.TestCase):
         success, error_msg = convert_webm_to_mp4(corrupted_file, bad_output)
         self.assertFalse(success)
         self.assertIn("failed", error_msg.lower())
+
+    def test_splash_screen_detection(self):
+        ffmpeg_exe = get_ffmpeg_binary()
+        splash_mp4 = Path(self.temp_dir) / "splash.mp4"
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-f", "lavfi",
+            "-i", "color=c=black:duration=1.5:size=320x240:rate=15",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            str(splash_mp4),
+        ]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+        is_splash, reason = check_is_splash_or_static(splash_mp4)
+        self.assertTrue(is_splash)
+        self.assertIn("splash screen detected", reason)
+
+    def test_live_video_passes_splash_check(self):
+        convert_webm_to_mp4(self.input_video, self.output_mp4)
+        is_splash, reason = check_is_splash_or_static(self.output_mp4)
+        self.assertFalse(is_splash)
+        self.assertIn("verified", reason)
 
 
 if __name__ == "__main__":

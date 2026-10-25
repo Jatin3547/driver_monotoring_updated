@@ -87,6 +87,21 @@ class TestEvidenceAPI(unittest.TestCase):
         with open(tmp_webm, "rb") as f:
             return f.read()
 
+    def _create_splash_webm(self) -> bytes:
+        tmp_webm = os.path.join(self.temp_dir, "splash.webm")
+        ffmpeg_exe = get_ffmpeg_binary()
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-f", "lavfi",
+            "-i", "color=c=black:duration=1:size=160x120:rate=10",
+            "-c:v", "libvpx",
+            tmp_webm,
+        ]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        with open(tmp_webm, "rb") as f:
+            return f.read()
+
     def tearDown(self):
         app.dependency_overrides.clear()
         self.engine.dispose()
@@ -156,6 +171,19 @@ class TestEvidenceAPI(unittest.TestCase):
         self.assertIn("usedMb", stats)
         self.assertIn("maxMb", stats)
         self.assertIn("quotaPercentage", stats)
+
+    def test_upload_rejected_for_splash_screen(self):
+        splash_bytes = self._create_splash_webm()
+        files = {
+            "video": ("recording.webm", io.BytesIO(splash_bytes), "video/webm"),
+        }
+        res = self.client.post(f"/api/evidence/upload/{self.incident_id}", files=files)
+        self.assertEqual(res.status_code, 201)
+        body = res.json()
+        self.assertEqual(body["incidentId"], self.incident_id)
+        self.assertEqual(body["status"], "failed")
+        self.assertIn("Evidence rejected", body.get("errorMessage", ""))
+        self.assertIn("splash screen detected", body.get("errorMessage", ""))
 
 
 if __name__ == "__main__":

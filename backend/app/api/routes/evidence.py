@@ -48,6 +48,7 @@ from app.services.evidence_manager import (
 from app.services.serializers import evidence_to_dict
 from app.services.storage import get_storage_provider
 from app.services.video_service import (
+    check_is_splash_or_static,
     compute_sha256,
     convert_webm_to_mp4,
     extract_snapshot_from_video,
@@ -271,6 +272,30 @@ async def upload_incident_evidence(
             else:
                 ev.status = "failed"
                 ev.error_message = f"Playability validation failed: {play_details}"
+            db.commit()
+            db.refresh(ev)
+            driver = db.query(Driver).filter(Driver.id == incident.driver_id).first()
+            vehicle = db.query(Vehicle).filter(Vehicle.id == incident.vehicle_id).first() if incident.vehicle_id else None
+            return evidence_to_dict(ev, driver_code=driver.code if driver else None, vehicle_code=vehicle.code if vehicle else None)
+
+        # Reject DroidCam splash screen or static placeholder footage
+        is_splash, splash_reason = check_is_splash_or_static(final_mp4_path)
+        if is_splash:
+            ev = db.query(Evidence).filter(Evidence.incident_id == incident_id).first()
+            error_msg = f"Evidence rejected: {splash_reason}. Live driver video required."
+            if not ev:
+                ev = Evidence(
+                    incident_id=incident.id,
+                    driver_id=incident.driver_id,
+                    vehicle_id=incident.vehicle_id or "",
+                    file_path=str(final_mp4_path),
+                    status="failed",
+                    error_message=error_msg,
+                )
+                db.add(ev)
+            else:
+                ev.status = "failed"
+                ev.error_message = error_msg
             db.commit()
             db.refresh(ev)
             driver = db.query(Driver).filter(Driver.id == incident.driver_id).first()

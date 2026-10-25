@@ -174,3 +174,73 @@ def extract_snapshot_from_video(
         logger.warning("OpenCV fallback snapshot extraction failed: %s", cv_exc)
 
     return False
+
+def check_is_splash_or_static(video_path: Path | str) -> Tuple[bool, str]:
+    """Inspects video frames to detect if the recorded footage is a static placeholder,
+    disconnected camera screen, or the DroidCam splash screen ("Start DroidCam") instead of real driver footage.
+
+    Returns (is_splash_or_static: bool, details: str).
+    """
+    path_str = str(video_path)
+    if not os.path.exists(path_str) or os.path.getsize(path_str) == 0:
+        return False, "File does not exist or is empty"
+
+    try:
+        import cv2
+        import numpy as np
+
+        cap = cv2.VideoCapture(path_str)
+        if not cap.isOpened():
+            return False, "Could not open video file with OpenCV"
+
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if frame_count <= 0:
+            cap.release()
+            return False, "Video contains zero frames"
+
+        sample_indices = [
+            int(frame_count * 0.1),
+            int(frame_count * 0.3),
+            int(frame_count * 0.5),
+            int(frame_count * 0.7),
+            int(frame_count * 0.9),
+        ]
+        sample_indices = sorted(list(set(max(0, min(idx, frame_count - 1)) for idx in sample_indices)))
+
+        sampled_frames = []
+        for idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                sampled_frames.append(frame)
+
+        cap.release()
+
+        if not sampled_frames:
+            return False, "No valid frames could be read from video"
+
+        black_ratios = [float(np.mean(f <= 15)) for f in sampled_frames]
+        std_devs = [float(np.std(f)) for f in sampled_frames]
+        mean_vals = [float(np.mean(f)) for f in sampled_frames]
+
+        avg_black_ratio = sum(black_ratios) / len(black_ratios)
+        avg_std = sum(std_devs) / len(std_devs)
+        avg_mean = sum(mean_vals) / len(mean_vals)
+
+        if avg_black_ratio > 0.985 and avg_std < 10.0 and avg_mean < 2.0:
+            return True, f"DroidCam splash screen detected ({avg_black_ratio * 100:.1f}% black pixels, std={avg_std:.1f})"
+
+        if len(sampled_frames) >= 2:
+            diffs = []
+            for i in range(len(sampled_frames) - 1):
+                f_a = sampled_frames[i].astype(float)
+                f_b = sampled_frames[i + 1].astype(float)
+                diffs.append(float(np.mean(np.abs(f_a - f_b))))
+            avg_diff = sum(diffs) / len(diffs)
+            if avg_diff < 0.05 and avg_std < 15.0:
+                return True, f"Static placeholder image detected (temporal variance = {avg_diff:.4f})"
+
+        return False, "Live driver video verified"
+    except Exception as exc:
+        logger.warning("Error inspecting video for splash screen: %s", exc)
+        return False, f"Inspection error: {exc}"

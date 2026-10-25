@@ -31,9 +31,18 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
   const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(null);
   const [frameCount, setFrameCount] = useState(0);
   const [buzzerTriggered, setBuzzerTriggered] = useState(false);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
+    return localStorage.getItem('fleetguard_camera_device_id') || '';
+  });
+  const [activeDeviceLabel, setActiveDeviceLabel] = useState<string>('');
+  const [isSplashDetected, setIsSplashDetected] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+
+  const isLiveFeedValid = useUsbCamera && camStatus === 'live' && !isSplashDetected;
 
   const {
     recorderState,
@@ -43,6 +52,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     stream: mediaStream,
     videoRef,
     driverId: status.driverId,
+    isLiveFeedValid,
   });
 
   useFleetSocketEvent<{ id: string; driverId: string }>('incident_created', (inc) => {
@@ -101,7 +111,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
   ]);
 
   // Handle camera permission and MediaStream acquisition
-  const startUsbCamera = async () => {
+  const startUsbCamera = async (targetDeviceId?: string) => {
     try {
       setUsbError(null);
       setCamStatus('connecting');
@@ -110,14 +120,92 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
         throw new Error('Camera access requires HTTPS or localhost context in browser');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 15 },
-        },
-        audio: false,
-      });
+      // Stop any existing tracks before requesting a new device stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+
+      let deviceIdToUse = targetDeviceId ?? selectedDeviceId;
+
+      // If no deviceId has been chosen yet, query available devices to avoid DroidCam if a physical webcam is available
+      if (!deviceIdToUse && navigator.mediaDevices.enumerateDevices) {
+        try {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          const videoDevs = devs.filter((d) => d.kind === 'videoinput');
+          setVideoDevices(videoDevs);
+          const physicalCam = videoDevs.find((d) => !d.label.toLowerCase().includes('droidcam') && d.label !== '');
+          if (physicalCam) {
+            deviceIdToUse = physicalCam.deviceId;
+          }
+        } catch {
+          // Fall back to default
+        }
+      }
+
+      const videoConstraints: MediaTrackConstraints = {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 15 },
+      };
+      if (deviceIdToUse) {
+        videoConstraints.deviceId = { exact: deviceIdToUse };
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
+          audio: false,
+        });
+      } catch (exactErr) {
+        console.warn('Failed to open exact camera device, falling back to default video input:', exactErr);
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 15 },
+          },
+          audio: false,
+        });
+      }
+
+      // After permission is granted, labels become available. Re-enumerate devices!
+      const activeTrack = stream.getVideoTracks()[0];
+      const settings = activeTrack?.getSettings();
+      const actualDeviceId = settings?.deviceId || activeTrack?.label || '';
+      const actualLabel = activeTrack?.label || 'Camera';
+      setActiveDeviceLabel(actualLabel);
+
+      let currentVideoDevices: MediaDeviceInfo[] = [];
+      if (navigator.mediaDevices.enumerateDevices) {
+        try {
+          const allDevs = await navigator.mediaDevices.enumerateDevices();
+          currentVideoDevices = allDevs.filter((d) => d.kind === 'videoinput');
+          setVideoDevices(currentVideoDevices);
+        } catch {
+          // ignore
+        }
+      }
+
+      // Smart Auto-Correction:
+      // If user had not explicitly picked a camera, and the browser defaulted to DroidCam,
+      // but an Integrated Webcam exists, automatically switch to the Integrated Webcam!
+      if (!targetDeviceId && !selectedDeviceId && actualLabel.toLowerCase().includes('droidcam') && currentVideoDevices.length > 1) {
+        const physicalCam = currentVideoDevices.find((d) => !d.label.toLowerCase().includes('droidcam'));
+        if (physicalCam) {
+          console.info('Auto-switching from DroidCam virtual camera to physical camera:', physicalCam.label);
+          activeTrack.stop();
+          setSelectedDeviceId(physicalCam.deviceId);
+          localStorage.setItem('fleetguard_camera_device_id', physicalCam.deviceId);
+          return startUsbCamera(physicalCam.deviceId);
+        }
+      }
+
+      if (actualDeviceId) {
+        setSelectedDeviceId(actualDeviceId);
+        localStorage.setItem('fleetguard_camera_device_id', actualDeviceId);
+      }
 
       streamRef.current = stream;
       setMediaStream(stream);
@@ -184,9 +272,10 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     setCamStatus('stopped');
     setVideoResolution(null);
     setFrameCount(0);
+    setIsSplashDetected(false);
   };
 
-  // Frame processing and upload loop when USB camera is active
+  // Frame processing, DroidCam splash screen detection, and upload loop when USB camera is active
   useEffect(() => {
     if (!useUsbCamera) return;
 
@@ -194,7 +283,9 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
     const canvas = document.createElement('canvas');
     canvas.width = 640;
     canvas.height = 480;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    let consecutiveSplashCount = 0;
 
     const intervalId = window.setInterval(() => {
       const video = videoRef.current;
@@ -202,6 +293,41 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
 
       try {
         ctx?.drawImage(video, 0, 0, 640, 480);
+
+        // Detect DroidCam splash screen ("Start DroidCam" placeholder)
+        if (ctx) {
+          const imgData = ctx.getImageData(0, 0, 640, 480).data;
+          let blackPixelCount = 0;
+          let totalLuminance = 0;
+          let samples = 0;
+          const step = 640 * 4 * 16 + 4 * 16; // Fast grid sampling (~300 samples across the frame)
+          for (let i = 0; i < imgData.length; i += step) {
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            totalLuminance += lum;
+            if (r <= 15 && g <= 15 && b <= 15) {
+              blackPixelCount++;
+            }
+            samples++;
+          }
+          const blackRatio = samples > 0 ? blackPixelCount / samples : 0;
+          const avgLuminance = samples > 0 ? totalLuminance / samples : 0;
+
+          // DroidCam splash has >98.5% pitch black pixels and avg luminance < 1.5
+          const isCurrentFrameSplash = blackRatio > 0.985 && avgLuminance < 1.5;
+          if (isCurrentFrameSplash) {
+            consecutiveSplashCount++;
+            if (consecutiveSplashCount >= 3) {
+              setIsSplashDetected(true);
+            }
+          } else {
+            consecutiveSplashCount = 0;
+            setIsSplashDetected(false);
+          }
+        }
+
         canvas.toBlob(
           async (blob) => {
             if (!blob || !isStreaming) return;
@@ -286,11 +412,16 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
         )}
 
         {/* Video Overlay Diagnostics Badge */}
-        <span className="absolute top-2 left-2 text-[10px] font-medium bg-black/75 text-white px-2 py-0.5 rounded flex items-center gap-1.5 shadow-sm backdrop-blur-xs">
+        <span className="absolute top-2 left-2 text-[10px] font-medium bg-black/75 text-white px-2 py-0.5 rounded flex items-center gap-1.5 shadow-sm backdrop-blur-xs z-20">
           {useUsbCamera ? (
             <>
-              <span className={`w-2 h-2 rounded-full ${camStatus === 'live' ? 'bg-status-success-text animate-pulse' : 'bg-status-warning-text'}`} />
-              USB WEBCAM {camStatus.toUpperCase()} {videoResolution ? `(${videoResolution.width}x${videoResolution.height})` : ''}
+              <span className={`w-2 h-2 rounded-full ${isSplashDetected ? 'bg-status-danger-text animate-ping' : camStatus === 'live' ? 'bg-status-success-text animate-pulse' : 'bg-status-warning-text'}`} />
+              {isSplashDetected
+                ? 'DROIDCAM OFFLINE (SPLASH SCREEN)'
+                : activeDeviceLabel
+                ? activeDeviceLabel.toUpperCase()
+                : 'USB WEBCAM'}{' '}
+              {camStatus.toUpperCase()} {videoResolution ? `(${videoResolution.width}x${videoResolution.height})` : ''}
             </>
           ) : isPrimaryDriver && status.source === 'live' ? (
             <>
@@ -306,6 +437,40 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
             'NO SIGNAL'
           )}
         </span>
+
+        {/* Prominent Warning when DroidCam Splash Screen is Detected */}
+        {isSplashDetected && useUsbCamera && (
+          <div className="absolute inset-x-0 bottom-0 bg-red-950/95 border-t-2 border-red-500 text-white p-3 z-30 flex flex-col gap-1.5 shadow-lg backdrop-blur-xs">
+            <div className="flex items-center gap-2 font-bold text-xs text-red-200">
+              <AlertTriangle size={15} className="text-yellow-400 shrink-0 animate-bounce" />
+              <span>DROIDCAM DISCONNECTED — "Start DroidCam" Placeholder Detected</span>
+            </div>
+            <p className="text-[11px] text-gray-200 leading-snug">
+              The camera feed contains the static DroidCam splash screen rather than live driver footage. Evidence recording is paused to avoid saving invalid evidence. Connect DroidCam on your phone or switch to your physical webcam.
+            </p>
+            {videoDevices.length > 1 && (
+              <div className="mt-1 flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] text-gray-300">Quick switch:</span>
+                {videoDevices
+                  .filter((d) => !d.label.toLowerCase().includes('droidcam'))
+                  .map((d) => (
+                    <button
+                      key={d.deviceId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDeviceId(d.deviceId);
+                        localStorage.setItem('fleetguard_camera_device_id', d.deviceId);
+                        startUsbCamera(d.deviceId);
+                      }}
+                      className="px-2.5 py-1 bg-primary hover:bg-primary/90 text-white rounded text-[11px] font-medium transition-colors cursor-pointer"
+                    >
+                      Switch to {d.label || 'Integrated Webcam'}
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Evidence Recording Overlays */}
         {recorderState === 'recording_incident' && (
@@ -334,35 +499,65 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
 
       {/* Camera Diagnostics & Controls Toolbar */}
       {isPrimaryDriver && (
-        <div className="px-3 py-2 flex items-center justify-between border-b border-border bg-surface-muted/40 text-[11px]">
-          <div className="flex items-center gap-1.5 text-text-muted">
+        <div className="px-3 py-2 flex items-center justify-between border-b border-border bg-surface-muted/40 text-[11px] gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-text-muted flex-wrap">
             {useUsbCamera && frameCount > 0 ? (
-              <span className="text-status-success-text flex items-center gap-1">
-                <Activity size={12} className="animate-spin" /> AI Ingestion Active ({frameCount} frames)
+              <span className={`flex items-center gap-1 ${isSplashDetected ? 'text-status-warning-text font-medium' : 'text-status-success-text'}`}>
+                <Activity size={12} className={isSplashDetected ? '' : 'animate-spin'} />{' '}
+                {isSplashDetected ? 'Feed: Disconnected (Splash Screen)' : `AI Ingestion Active (${frameCount} frames)`}
               </span>
             ) : (
               <span>{useUsbCamera ? 'Webcam active' : 'Click to stream local laptop/USB webcam'}</span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={useUsbCamera ? stopUsbCamera : startUsbCamera}
-            className={`font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
-              useUsbCamera
-                ? 'bg-status-danger-bg text-status-danger-text border border-status-danger-border hover:bg-status-danger-bg/80'
-                : 'bg-primary text-white hover:bg-primary/90'
-            }`}
-          >
-            {useUsbCamera ? (
-              <>
-                <VideoOff size={12} /> Stop Camera
-              </>
-            ) : (
-              <>
-                <Video size={12} /> Use USB / Laptop Camera
-              </>
+
+          <div className="flex items-center gap-2">
+            {/* Camera Device Dropdown Selector */}
+            {videoDevices.length > 1 && (
+              <div className="flex items-center gap-1 bg-surface border border-border rounded px-1.5 py-0.5 shadow-2xs">
+                <Camera size={12} className="text-text-muted shrink-0" />
+                <select
+                  value={selectedDeviceId}
+                  aria-label="Select Camera Device"
+                  onChange={(e) => {
+                    const newId = e.target.value;
+                    setSelectedDeviceId(newId);
+                    localStorage.setItem('fleetguard_camera_device_id', newId);
+                    if (useUsbCamera) {
+                      startUsbCamera(newId);
+                    }
+                  }}
+                  className="bg-transparent text-text-primary text-[11px] font-medium focus:outline-none max-w-[150px] truncate cursor-pointer"
+                >
+                  {videoDevices.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId} className="bg-surface text-text-primary">
+                      {dev.label || `Camera ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
-          </button>
+
+            <button
+              type="button"
+              onClick={useUsbCamera ? stopUsbCamera : () => startUsbCamera()}
+              className={`font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
+                useUsbCamera
+                  ? 'bg-status-danger-bg text-status-danger-text border border-status-danger-border hover:bg-status-danger-bg/80'
+                  : 'bg-primary text-white hover:bg-primary/90'
+              }`}
+            >
+              {useUsbCamera ? (
+                <>
+                  <VideoOff size={12} /> Stop Camera
+                </>
+              ) : (
+                <>
+                  <Video size={12} /> Use USB / Laptop Camera
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
 

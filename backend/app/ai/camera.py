@@ -194,12 +194,24 @@ class CameraManager:
                 if sys.platform.startswith("linux") and not os.path.exists(f"/dev/video{source}"):
                     return False
 
-                # On Windows, cv2.CAP_DSHOW provides faster initialization and prevents freezing
-                cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    # Fallback to default backend if DirectShow fails
-                    cap.release()
+                cap = None
+                if sys.platform == "win32":
+                    for backend in [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]:
+                        try:
+                            temp_cap = cv2.VideoCapture(source, backend)
+                            if temp_cap.isOpened():
+                                cap = temp_cap
+                                break
+                            temp_cap.release()
+                        except Exception:
+                            continue
+                else:
                     cap = cv2.VideoCapture(source)
+
+                if cap is None or not cap.isOpened():
+                    if cap is not None:
+                        cap.release()
+                    return False
             else:
                 source_str = str(source).strip()
                 if "://" in source_str:
@@ -225,6 +237,16 @@ class CameraManager:
             if not ok or test_frame is None:
                 cap.release()
                 return False
+
+            # Check if this frame is a static placeholder / DroidCam splash screen
+            import numpy as np
+            is_splash = (np.mean(test_frame <= 15) > 0.99) and (np.std(test_frame) < 8.0)
+            if is_splash:
+                logger.warning("Camera source %s outputs DroidCam splash screen placeholder.", raw_source)
+                if len(self.candidate_sources) > 1 and raw_source != self.candidate_sources[-1]:
+                    logger.info("Skipping splash screen source %s to try next candidate.", raw_source)
+                    cap.release()
+                    return False
 
             self._cap = cap
             self.active_source = raw_source

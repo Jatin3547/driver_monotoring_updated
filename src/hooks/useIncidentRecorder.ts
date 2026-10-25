@@ -5,6 +5,7 @@ interface UseIncidentRecorderProps {
   stream: MediaStream | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   driverId?: string;
+  isLiveFeedValid?: boolean;
   onUploadSuccess?: (incidentId: string) => void;
   onUploadError?: (error: Error) => void;
 }
@@ -20,6 +21,7 @@ export function useIncidentRecorder({
   stream,
   videoRef,
   driverId = 'DRV-001',
+  isLiveFeedValid = true,
   onUploadSuccess,
   onUploadError,
 }: UseIncidentRecorderProps) {
@@ -154,6 +156,14 @@ export function useIncidentRecorder({
         return;
       }
 
+      // Reject recording if live camera feed is invalid / DroidCam splash screen
+      if (!isLiveFeedValid) {
+        const warning = 'Evidence recording aborted: Camera stream contains DroidCam splash screen placeholder instead of live driver.';
+        console.warn(warning);
+        if (onUploadError) onUploadError(new Error(warning));
+        return;
+      }
+
       if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') {
         return;
       }
@@ -232,7 +242,7 @@ export function useIncidentRecorder({
         }
       }, 10000);
     },
-    [driverId, captureStillSnapshot, onUploadSuccess, onUploadError]
+    [driverId, isLiveFeedValid, captureStillSnapshot, onUploadSuccess, onUploadError]
   );
 
   return {
