@@ -1,14 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, Lock, Mail, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, AlertCircle, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { APP_NAME } from '@/utils/constants';
-import { USE_MOCK_DATA } from '@/services/config';
+import { USE_MOCK_DATA, API_BASE_URL } from '@/services/config';
 import { useAuth } from '@/hooks/useAuth';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, loading, error } = useAuth();
+  const { login, loginAsDemo, loading, error } = useAuth();
   const [email, setEmail] = useState('admin@fleetguard.demo');
   const [password, setPassword] = useState('admin123');
   const [localError, setLocalError] = useState<string | null>(null);
@@ -17,21 +17,29 @@ export default function LoginPage() {
     e.preventDefault();
     setLocalError(null);
 
-    if (USE_MOCK_DATA) {
-      // Mock mode: UI placeholder only, matches original Phase 1 behavior
-      // — no backend call, any input proceeds straight to the dashboard.
-      navigate('/');
-      return;
-    }
-
-    // Real mode: authenticate against the FastAPI backend.
     try {
       await login(email, password);
       navigate('/');
-    } catch {
-      // error state is already set by useAuth; nothing further to do.
-      setLocalError('Sign-in failed. Check the backend is running and your credentials are correct.');
+    } catch (err: unknown) {
+      const errStr = String(err);
+      const isNetworkIssue =
+        err instanceof TypeError ||
+        errStr.includes('Failed to fetch') ||
+        errStr.includes('Network') ||
+        errStr.includes('Cannot reach');
+
+      if (isNetworkIssue) {
+        setLocalError('Backend is offline in this preview environment. Click "Continue as Demo Admin" below to open the dashboard.');
+      } else {
+        setLocalError(err instanceof Error ? err.message : 'Sign-in failed. Please check your credentials.');
+      }
     }
+  }
+
+  function handleDemoLogin() {
+    setLocalError(null);
+    loginAsDemo();
+    navigate('/');
   }
 
   return (
@@ -45,18 +53,27 @@ export default function LoginPage() {
           <p className="text-xs text-text-muted mt-1">AI Driver Monitoring &amp; Fleet Management</p>
         </div>
 
-        <div className="bg-surface border border-border rounded-lg p-6">
+        <div className="bg-surface border border-border rounded-lg p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-text-primary mb-1">Sign in</h2>
           <p className="text-xs text-text-muted mb-5">
-            {USE_MOCK_DATA
-              ? 'Demo mode: any input signs you in — no backend required.'
-              : 'Sign in with a registered account, or use the seeded demo login: admin@fleetguard.demo / admin123'}
+            Sign in with a registered account, or use the seeded demo login: <span className="font-mono text-text-primary">admin@fleetguard.demo</span> / <span className="font-mono text-text-primary">admin123</span>
           </p>
 
-          {!USE_MOCK_DATA && (error || localError) && (
-            <div className="flex items-start gap-2 bg-status-danger-bg border border-status-danger-border text-status-danger-text text-xs rounded-md px-3 py-2 mb-4">
+          {(error || localError) && (
+            <div className="flex items-start gap-2 bg-status-danger-bg border border-status-danger-border text-status-danger-text text-xs rounded-md px-3 py-2 mb-4 animate-in fade-in duration-150">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              <span>{error ?? localError}</span>
+              <div className="flex-1">
+                <span>{localError ?? error}</span>
+                <div className="mt-1.5">
+                  <button
+                    type="button"
+                    onClick={handleDemoLogin}
+                    className="underline font-semibold hover:opacity-90 cursor-pointer text-[11px]"
+                  >
+                    Click here to enter in Demo Mode immediately
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -97,33 +114,43 @@ export default function LoginPage() {
 
             <div className="flex items-center justify-between text-xs">
               <label className="flex items-center gap-2 text-text-secondary">
-                <input type="checkbox" className="rounded border-border" />
+                <input type="checkbox" defaultChecked className="rounded border-border" />
                 Remember me
               </label>
-              <span className="text-brand-blue cursor-not-allowed opacity-60">Forgot password?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail('admin@fleetguard.demo');
+                  setPassword('admin123');
+                }}
+                className="text-brand-blue hover:underline cursor-pointer"
+              >
+                Auto-fill demo
+              </button>
             </div>
 
-            <Button type="submit" className="w-full" disabled={!USE_MOCK_DATA && loading}>
-              {!USE_MOCK_DATA && loading ? 'Signing in…' : 'Sign in'}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Signing in…' : 'Sign in'}
             </Button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setEmail('admin@fleetguard.demo');
-                setPassword('admin123');
-              }}
-              className="w-full py-1.5 text-xs text-brand-blue hover:underline text-center cursor-pointer"
-            >
-              Click here to auto-fill demo credentials
-            </button>
+            {/* Standalone Demo Mode Button for Cloud Previews / Google AI Studio */}
+            <div className="pt-2 border-t border-border mt-3">
+              <button
+                type="button"
+                onClick={handleDemoLogin}
+                className="w-full py-2 px-3 rounded-md border border-brand-blue/30 bg-brand-blue/5 text-brand-blue hover:bg-brand-blue/10 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Sparkles size={14} />
+                Continue as Demo Admin (No Backend Required)
+              </button>
+            </div>
           </form>
         </div>
 
         <p className="text-center text-xs text-text-muted mt-5">
           {USE_MOCK_DATA
-            ? 'Set VITE_USE_MOCK=false to authenticate against the real backend.'
-            : 'Authenticated against the FastAPI backend at ' + import.meta.env.VITE_API_BASE_URL}
+            ? 'Running in standalone demo mode with simulated telemetry.'
+            : `API Endpoint: ${API_BASE_URL}`}
         </p>
       </div>
     </div>

@@ -3,8 +3,20 @@
 // VITE_USE_MOCK env var without touching any component or page.
 export const USE_MOCK_DATA: boolean = import.meta.env.VITE_USE_MOCK !== 'false';
 
-export const API_BASE_URL: string =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api';
+// Auto-detect API base URL:
+// In browser environments loaded over HTTPS (such as Google AI Studio, cloud previews),
+// use the proxied relative '/api' path to avoid Mixed Content (HTTPS -> HTTP) blocking.
+const getDetectedApiBaseUrl = (): string => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    return `${window.location.origin}/api`;
+  }
+  return 'http://localhost:8000/api';
+};
+
+export const API_BASE_URL: string = getDetectedApiBaseUrl();
 
 // Simulated network latency so loading states are visible and realistic
 // even while backed by mock data.
