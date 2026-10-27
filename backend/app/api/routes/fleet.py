@@ -1,15 +1,15 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
-from app.models import Driver, Incident, Vehicle
+from app.api.deps import get_db, require_fleet_admin
+from app.models import Driver, Incident, User, Vehicle
 from app.schemas.analytics import FleetSummary
 
 router = APIRouter()
 
 
 @router.get("/summary", response_model=FleetSummary)
-def fleet_summary(db: Session = Depends(get_db)):
+def fleet_summary(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     vehicles = db.query(Vehicle).all()
     drivers = db.query(Driver).all()
     open_incidents = db.query(Incident).filter(Incident.status == "open").count()

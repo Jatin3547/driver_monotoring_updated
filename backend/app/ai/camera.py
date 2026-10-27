@@ -3,6 +3,7 @@
 Features:
 - Dedicated background thread continuously captures frames to prevent blocking the async FastAPI event loop.
 - Single-frame buffer pattern (always yields the freshest frame, zero latency accumulation).
+- Rolling pre-event frame buffer: a bounded deque of the last ~6 seconds of frames for incident evidence.
 - Crash-proof HTTP/MJPEG stream reader for DroidCam / IP cameras bypassing libavformat demuxer C-assertions.
 - Bounded auto-reconnect with exponential backoff on frame read failures or disconnections.
 - Resource cleanup on shutdown (guaranteed cv2.VideoCapture / socket release).
@@ -12,7 +13,8 @@ Features:
 import logging
 import threading
 import time
-from typing import Optional, Tuple, Union
+from collections import deque
+from typing import List, Optional, Tuple, Union
 
 logger = logging.getLogger("fleet.ai.camera")
 
@@ -183,11 +185,18 @@ class CameraManager:
         self._running = False
         self._lock = threading.RLock()
 
-        # Frame storage
+        # Frame storage (latest frame)
         self._latest_frame = None
         self._latest_timestamp: float = 0.0
         self._frame_count: int = 0
         self._last_injected_time: float = 0.0
+
+        # Rolling pre-event frame buffer
+        # Stores (timestamp: float, frame: np.ndarray) tuples for the last ~6s.
+        # Capped at target_fps * 6 frames to bound memory usage.
+        _buf_seconds = 6.0
+        self._buffer_max_frames: int = max(30, int(self.target_fps * _buf_seconds))
+        self._frame_buffer: deque = deque(maxlen=self._buffer_max_frames)
 
         # Health & diagnostics
         self._status: str = "stopped"  # "active" | "disconnected" | "reconnecting" | "error" | "stopped"
@@ -244,6 +253,11 @@ class CameraManager:
             self._frame_width = frame.shape[1] if hasattr(frame, "shape") else 640
             self._frame_height = frame.shape[0] if hasattr(frame, "shape") else 480
             self._last_injected_time = now
+            # Also push to rolling pre-event buffer
+            try:
+                self._frame_buffer.append((now, frame.copy()))
+            except Exception:
+                pass
 
     def release_hardware(self) -> None:
         """Explicitly releases underlying cv2 VideoCapture hardware handle so browser can use it."""
@@ -309,6 +323,27 @@ class CameraManager:
             if self._latest_frame is None or self._status != "active":
                 return False, None, self._latest_timestamp
             return True, self._latest_frame.copy(), self._latest_timestamp
+
+    def get_pre_event_frames(self, seconds: float = 5.0) -> List[Tuple[float, object]]:
+        """Returns a list of (timestamp, frame) tuples from the rolling buffer covering
+        approximately the last `seconds` of footage before the current moment.
+
+        Returns an empty list if no frames are buffered or the camera was inactive.
+        Frames are returned in chronological order (oldest first).
+        """
+        now = time.time()
+        cutoff = now - seconds
+        with self._lock:
+            return [
+                (ts, frm.copy())
+                for ts, frm in self._frame_buffer
+                if ts >= cutoff
+            ]
+
+    def get_frame_dimensions(self) -> Tuple[int, int]:
+        """Returns (width, height) of the camera stream. Falls back to (640, 480)."""
+        with self._lock:
+            return (self._frame_width or 640, self._frame_height or 480)
 
     @staticmethod
     def _is_network_reachable(url: str, timeout: float = 1.0) -> bool:
@@ -498,13 +533,17 @@ class CameraManager:
                 time.sleep(0.5)
                 continue
 
-            # 3. Store frame atomically
+            # 3. Store frame atomically and push to rolling pre-event buffer
             now = time.time()
             with self._lock:
                 self._latest_frame = frame
                 self._latest_timestamp = now
                 self._frame_count += 1
                 fps_frames += 1
+                try:
+                    self._frame_buffer.append((now, frame.copy()))
+                except Exception:
+                    pass
 
             # 4. Update rolling FPS every 2 seconds
             if now - fps_timer >= 2.0:

@@ -22,6 +22,12 @@ class TestPhase1BackendFoundation(unittest.TestCase):
     def setUpClass(cls):
         init_db()
         cls.client = TestClient(app)
+        login = cls.client.post(
+            "/api/auth/login",
+            data={"username": "admin@fleetguard.demo", "password": "admin123"},
+        )
+        assert login.status_code == 200, login.text
+        cls.admin_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     def test_01_health_check(self):
         """Health check returns healthy status."""
@@ -84,7 +90,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
 
     def test_05_trips_listing_and_active_trips(self):
         """Trips endpoint returns trips with driver and vehicle metadata."""
-        res = self.client.get("/api/trips")
+        res = self.client.get("/api/trips", headers=self.admin_headers)
         self.assertEqual(res.status_code, 200)
         trips = res.json()
         self.assertIsInstance(trips, list)
@@ -97,7 +103,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
         self.assertIn("driverId", first)
 
         # Active trips query
-        active_res = self.client.get("/api/trips/active")
+        active_res = self.client.get("/api/trips/active", headers=self.admin_headers)
         self.assertEqual(active_res.status_code, 200)
         active_trips = active_res.json()
         for t in active_trips:
@@ -113,6 +119,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
                 "startLocation": "Whitefield Hub",
                 "endLocation": "Peenya Depot",
             },
+            headers=self.admin_headers,
         )
         self.assertEqual(start_res.status_code, 201)
         trip_data = start_res.json()
@@ -124,6 +131,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
         patch_res = self.client.patch(
             f"/api/trips/{trip_id}",
             json={"status": "completed", "distanceKm": 41.2},
+            headers=self.admin_headers,
         )
         self.assertEqual(patch_res.status_code, 200)
         self.assertEqual(patch_res.json()["status"], "completed")
@@ -142,6 +150,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
                 "location": "Silk Board Junction, Bengaluru",
                 "description": "Continuous eye closure for 2.2s detected by live pipeline.",
             },
+            headers=self.admin_headers,
         )
         self.assertEqual(inc_res.status_code, 201)
         inc_data = inc_res.json()
@@ -163,6 +172,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
                 "postEventSeconds": 3.0,
                 "isProtected": False,
             },
+            headers=self.admin_headers,
         )
         self.assertEqual(ev_res.status_code, 201)
         ev_data = ev_res.json()
@@ -174,12 +184,13 @@ class TestPhase1BackendFoundation(unittest.TestCase):
         protect_res = self.client.patch(
             f"/api/evidence/{ev_id}/protect",
             json={"isProtected": True},
+            headers=self.admin_headers,
         )
         self.assertEqual(protect_res.status_code, 200)
         self.assertEqual(protect_res.json()["isProtected"], True)
 
         # 4. Fetch evidence by incident ID
-        by_inc_res = self.client.get(f"/api/evidence/incident/{inc_id}")
+        by_inc_res = self.client.get(f"/api/evidence/incident/{inc_id}", headers=self.admin_headers)
         self.assertEqual(by_inc_res.status_code, 200)
         self.assertEqual(by_inc_res.json()["id"], ev_id)
 
@@ -187,6 +198,7 @@ class TestPhase1BackendFoundation(unittest.TestCase):
         resolve_res = self.client.patch(
             f"/api/incidents/{inc_id}",
             json={"status": "resolved", "acknowledgedBy": "Fleet Safety Manager"},
+            headers=self.admin_headers,
         )
         self.assertEqual(resolve_res.status_code, 200)
         self.assertEqual(resolve_res.json()["status"], "resolved")

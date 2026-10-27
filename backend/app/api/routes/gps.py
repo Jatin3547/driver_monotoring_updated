@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_current_driver, get_db, require_fleet_admin
 from app.gps.simulator import record_position
-from app.models import GPSLocation, Vehicle
+from app.models import Driver, GPSLocation, User, Vehicle
 from app.services.serializers import gps_to_dict
 
 router = APIRouter()
@@ -17,8 +17,25 @@ def _trackable_vehicles(db: Session) -> list[Vehicle]:
     return [v for v in db.query(Vehicle).all() if v.status not in _NO_SIGNAL_STATUSES]
 
 
+@router.get("/my-vehicle")
+def gps_my_vehicle(
+    db: Session = Depends(get_db),
+    driver: Driver = Depends(get_current_driver),
+):
+    """Current position for the authenticated driver's assigned vehicle only."""
+    if not driver.assigned_vehicle_id:
+        raise HTTPException(status_code=404, detail="No vehicle is assigned to this driver")
+    vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Assigned vehicle was not found")
+    if vehicle.status in _NO_SIGNAL_STATUSES:
+        raise HTTPException(status_code=404, detail="Assigned vehicle has no live GPS signal")
+    loc = record_position(db, vehicle)
+    return gps_to_dict(loc, vehicle.code)
+
+
 @router.get("/vehicles")
-def gps_all_vehicles(db: Session = Depends(get_db)):
+def gps_all_vehicles(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     """Current simulated position for every trackable vehicle."""
     result = []
     for vehicle in _trackable_vehicles(db):
@@ -28,7 +45,7 @@ def gps_all_vehicles(db: Session = Depends(get_db)):
 
 
 @router.get("/vehicles/{vehicle_code}")
-def gps_one_vehicle(vehicle_code: str, db: Session = Depends(get_db)):
+def gps_one_vehicle(vehicle_code: str, db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     vehicle = db.query(Vehicle).filter(Vehicle.code == vehicle_code).first()
     if not vehicle:
         raise HTTPException(status_code=404, detail=f"Vehicle '{vehicle_code}' not found")
@@ -39,7 +56,7 @@ def gps_one_vehicle(vehicle_code: str, db: Session = Depends(get_db)):
 
 
 @router.get("/history/{vehicle_code}")
-def gps_history(vehicle_code: str, limit: int = 50, db: Session = Depends(get_db)):
+def gps_history(vehicle_code: str, limit: int = 50, db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     vehicle = db.query(Vehicle).filter(Vehicle.code == vehicle_code).first()
     if not vehicle:
         raise HTTPException(status_code=404, detail=f"Vehicle '{vehicle_code}' not found")
@@ -55,7 +72,7 @@ def gps_history(vehicle_code: str, limit: int = 50, db: Session = Depends(get_db
 
 
 @router.get("/locations")
-def gps_locations_alias(db: Session = Depends(get_db)):
+def gps_locations_alias(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     """Alias matching the existing frontend gpsService.getVehicleLocations()
     call path (`/gps/locations`). Same data as GET /gps/vehicles."""
     return gps_all_vehicles(db)

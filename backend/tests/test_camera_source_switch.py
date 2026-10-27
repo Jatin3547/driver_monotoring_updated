@@ -21,6 +21,15 @@ from app.main import app
 client = TestClient(app)
 
 
+def _manager_headers():
+    response = client.post(
+        "/api/auth/login",
+        data={"username": "admin@fleetguard.demo", "password": "admin123"},
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 class MockMJPEGHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/video":
@@ -97,7 +106,8 @@ class TestCameraSourceSwitch(unittest.TestCase):
 
     def test_api_select_source_endpoint(self):
         # Select webcam
-        res = client.post("/api/monitoring/select-source", json={"sourceType": "webcam"})
+        headers = _manager_headers()
+        res = client.post("/api/monitoring/select-source", json={"sourceType": "webcam"}, headers=headers)
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertTrue(data.get("ok"))
@@ -107,6 +117,7 @@ class TestCameraSourceSwitch(unittest.TestCase):
         res = client.post(
             "/api/monitoring/select-source",
             json={"sourceType": "droidcam", "url": "http://192.168.0.4:4747/video"},
+            headers=headers,
         )
         self.assertEqual(res.status_code, 200)
         data = res.json()
@@ -115,13 +126,14 @@ class TestCameraSourceSwitch(unittest.TestCase):
 
     def test_api_probe_network_camera_endpoint(self):
         # Probe our local mock server
-        res = client.get(f"/api/monitoring/probe-network-camera?url=http://127.0.0.1:{self.port}/video")
+        headers = _manager_headers()
+        res = client.get(f"/api/monitoring/probe-network-camera?url=http://127.0.0.1:{self.port}/video", headers=headers)
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertTrue(data.get("reachable"))
 
         # Probe unreachable host
-        res = client.get("/api/monitoring/probe-network-camera?url=http://192.0.2.1:4747/video")
+        res = client.get("/api/monitoring/probe-network-camera?url=http://192.0.2.1:4747/video", headers=headers)
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertFalse(data.get("reachable"))

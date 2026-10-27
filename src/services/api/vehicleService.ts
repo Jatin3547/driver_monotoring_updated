@@ -12,3 +12,12 @@ export async function getVehicleById(id: string): Promise<Vehicle | undefined> {
   if (USE_MOCK_DATA) return mockDelay(mockVehicles.find((v) => v.id === id));
   return apiClient.get<Vehicle>(`/vehicles/${id}`);
 }
+
+export async function getAssignedVehicle(): Promise<Vehicle | undefined> {
+  if (USE_MOCK_DATA) return mockDelay(mockVehicles[0]);
+  try {
+    return await apiClient.get<Vehicle>('/vehicles/assigned');
+  } catch {
+    return undefined;
+  }
+}

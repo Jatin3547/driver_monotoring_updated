@@ -8,6 +8,11 @@ export async function getIncidents(): Promise<Incident[]> {
   return apiClient.get<Incident[]>('/incidents');
 }
 
+export async function getMyIncidents(): Promise<Incident[]> {
+  if (USE_MOCK_DATA) return mockDelay(mockIncidents.filter((i) => i.driverId === 'DRV-001'));
+  return apiClient.get<Incident[]>('/incidents/mine');
+}
+
 export async function getAlerts(): Promise<Alert[]> {
   if (USE_MOCK_DATA) return mockDelay(mockAlerts);
   return apiClient.get<Alert[]>('/alerts');

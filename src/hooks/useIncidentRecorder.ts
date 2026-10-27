@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { uploadIncidentEvidence } from '@/services/api/evidenceService';
 import { API_BASE_URL } from '@/services/config';
+import { getStoredToken } from '@/services/api/authService';
 
 interface UseIncidentRecorderProps {
   stream: MediaStream | null;
@@ -78,7 +79,9 @@ export function useIncidentRecorder({
     }
 
     // Direct snapshot fallback from backend
-    return fetch(`${API_BASE_URL}/monitoring/current-snapshot`)
+    return fetch(`${API_BASE_URL}/monitoring/current-snapshot`, {
+      headers: { Authorization: `Bearer ${getStoredToken() ?? ''}` },
+    })
       .then((res) => {
         if (res.ok) return res.blob();
         return null;

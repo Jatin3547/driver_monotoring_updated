@@ -28,7 +28,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_db, MANAGER_ROLES
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.models import Driver, Evidence, Incident, User, Vehicle
@@ -56,7 +56,25 @@ from app.services.video_service import (
     verify_sha256,
 )
 
-router = APIRouter()
+def _require_evidence_manager(
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> User:
+    """Evidence contains sensitive footage, so every operation is manager-only.
+
+    Query tokens are supported for browser video/image elements that cannot set
+    an Authorization header; regular API calls continue to use bearer headers.
+    """
+    current_user = _get_user_or_token(token, authorization, db)
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if current_user.role not in MANAGER_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Fleet manager access required.")
+    return current_user
+
+
+router = APIRouter(dependencies=[Depends(_require_evidence_manager)])
 
 
 def _get_user_or_token(

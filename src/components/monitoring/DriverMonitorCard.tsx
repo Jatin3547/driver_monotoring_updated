@@ -7,6 +7,7 @@ import { startContinuousAlarm, stopContinuousAlarm, isAudioMuted } from '@/utils
 import { useFleetSocketEvent } from '@/hooks/useFleetSocketEvent';
 import { useIncidentRecorder } from '@/hooks/useIncidentRecorder';
 import { API_BASE_URL } from '@/services/config';
+import { getStoredToken } from '@/services/api/authService';
 import type { Driver, DriverMonitoringStatus, Vehicle } from '@/types';
 
 interface Props {
@@ -152,7 +153,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
       try {
         await fetch(`${API_BASE_URL}/monitoring/select-source`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getStoredToken() ?? ''}` },
           body: JSON.stringify({ sourceType: 'webcam' }),
         });
       } catch {
@@ -243,7 +244,9 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
       stopUsbCameraTracks();
 
       // Probe DroidCam Wi-Fi endpoint (192.168.0.4:4747)
-      const probeRes = await fetch(`${API_BASE_URL}/monitoring/probe-network-camera?url=http://192.168.0.4:4747/video`);
+      const probeRes = await fetch(`${API_BASE_URL}/monitoring/probe-network-camera?url=http://192.168.0.4:4747/video`, {
+        headers: { Authorization: `Bearer ${getStoredToken() ?? ''}` },
+      });
       const probeData = await probeRes.json();
 
       if (!probeData.reachable) {
@@ -253,7 +256,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
       // Tell backend to switch AI camera reader to DroidCam HTTP stream
       await fetch(`${API_BASE_URL}/monitoring/select-source`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getStoredToken() ?? ''}` },
         body: JSON.stringify({
           sourceType: 'droidcam',
           url: 'http://192.168.0.4:4747/video',
@@ -349,7 +352,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
               await fetch(`${API_BASE_URL}/monitoring/camera-frame`, {
                 method: 'POST',
                 body: blob,
-                headers: { 'Content-Type': 'image/jpeg' },
+              headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${getStoredToken() ?? ''}` },
               });
               setFrameCount((prev) => prev + 1);
             } catch {
@@ -441,7 +444,7 @@ export function DriverMonitorCard({ status, driver, vehicle }: Props) {
         ) : (
           <img
             ref={droidCamImgRef}
-            src={`${API_BASE_URL}/monitoring/video-feed`}
+            src={`${API_BASE_URL}/monitoring/video-feed?token=${encodeURIComponent(getStoredToken() ?? '')}`}
             alt="DroidCam Wi-Fi Live Feed"
             crossOrigin="anonymous"
             onLoad={() => {

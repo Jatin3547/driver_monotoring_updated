@@ -31,6 +31,10 @@ MIGRATION_SCHEMA: dict[str, list[tuple[str, str, bool, bool]]] = {
         ("recording_end_timestamp", "DATETIME", True, False),
         ("expires_at", "DATETIME", True, False),
     ],
+    "drivers": [
+        # Links a driver record to a User account (for driver-role login)
+        ("user_id", "VARCHAR", True, True),
+    ],
 }
 
 

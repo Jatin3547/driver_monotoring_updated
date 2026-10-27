@@ -11,6 +11,7 @@ import {
   toggleEvidenceProtection,
 } from '@/services/api/evidenceService';
 import { API_BASE_URL } from '@/services/config';
+import { getStoredToken } from '@/services/api/authService';
 import {
   MapPin,
   User,
@@ -155,16 +156,18 @@ export function IncidentDetailPanel({ incident, driver, vehicle, onStatusUpdated
     return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
+  const evidenceToken = getStoredToken();
+  const evidenceAuth = evidenceToken ? `?token=${encodeURIComponent(evidenceToken)}` : '';
   const videoStreamUrl = evidence?.id
-    ? `${API_BASE_URL}/evidence/${evidence.id}/stream`
+    ? `${API_BASE_URL}/evidence/${evidence.id}/stream${evidenceAuth}`
     : undefined;
 
   const snapshotUrl = evidence?.id
-    ? `${API_BASE_URL}/evidence/${evidence.id}/snapshot`
+    ? `${API_BASE_URL}/evidence/${evidence.id}/snapshot${evidenceAuth}`
     : incident.snapshotUrl;
 
   const downloadVideoUrl = evidence?.id
-    ? `${API_BASE_URL}/evidence/${evidence.id}/download`
+    ? `${API_BASE_URL}/evidence/${evidence.id}/download${evidenceAuth}`
     : undefined;
 
   return (

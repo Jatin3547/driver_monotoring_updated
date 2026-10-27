@@ -29,6 +29,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Expired/invalid token: clear it so the app doesn't keep retrying
     // with a dead session, and let the caller's error state explain it.
     setStoredToken(null);
+    window.dispatchEvent(new Event('fleetguard:unauthorized'));
     throw new Error('Your session has expired. Please sign in again.');
   }
 

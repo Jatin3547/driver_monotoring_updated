@@ -15,11 +15,14 @@ from app.services.evidence_manager import (
 )
 from app.services.storage import LocalStorageProvider
 import app.services.storage as storage_module
+import app.services.evidence_manager as evidence_manager
 
 
 class TestStorageQuota(unittest.TestCase):
 
     def setUp(self):
+        # Reservation state is process-global; make each quota test independent.
+        evidence_manager._active_reservations_count = 0
         self.temp_dir = tempfile.mkdtemp()
         self.old_dir = settings.evidence_storage_dir
         self.old_max = settings.evidence_max_storage_mb
@@ -36,6 +39,7 @@ class TestStorageQuota(unittest.TestCase):
         # Clean up reservations
         while release_recording_slot():
             pass
+        evidence_manager._active_reservations_count = 0
         settings.evidence_storage_dir = self.old_dir
         settings.evidence_max_storage_mb = self.old_max
         settings.evidence_reserved_recording_mb = self.old_reserved

@@ -63,6 +63,13 @@ export async function getTrips(statusFilter?: string): Promise<Trip[]> {
   return apiClient.get<Trip[]>(`/trips${query}`);
 }
 
+export async function getMyTrips(): Promise<Trip[]> {
+  if (USE_MOCK_DATA) {
+    return mockDelay(mockTrips.filter((t) => t.driverCode === 'DRV-001' || t.driverId === 'DRV-001'));
+  }
+  return apiClient.get<Trip[]>('/trips/my-trips');
+}
+
 export async function getActiveTrips(): Promise<Trip[]> {
   if (USE_MOCK_DATA) {
     return mockDelay(mockTrips.filter((t) => t.status === 'in-progress'));

@@ -15,6 +15,10 @@ data from real data at a glance.
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.core.security import decode_access_token
+from app.db.session import SessionLocal
+from app.api.deps import MANAGER_ROLES
+from app.models import User
 
 from app.websocket.manager import manager
 
@@ -23,6 +27,16 @@ router = APIRouter()
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    email = decode_access_token(token) if token else None
+    if not email:
+        await websocket.close(code=4401)
+        return
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+        if user is None or user.role not in MANAGER_ROLES:
+            await websocket.close(code=4403)
+            return
     await manager.connect(websocket)
     try:
         while True:

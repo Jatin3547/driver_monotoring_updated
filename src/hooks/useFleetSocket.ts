@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { API_BASE_URL } from '@/services/config';
+import { getStoredToken } from '@/services/api/authService';
 
 export type WebSocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
@@ -23,6 +24,8 @@ function wsUrl(): string {
   // API_BASE_URL is e.g. "http://127.0.0.1:8000/api" -> ws://127.0.0.1:8000/api/ws
   const httpUrl = new URL('ws', API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`);
   httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  const token = getStoredToken();
+  if (token) httpUrl.searchParams.set('token', token);
   return httpUrl.toString();
 }
 

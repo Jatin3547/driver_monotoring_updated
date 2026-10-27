@@ -4,14 +4,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
-from app.models import Driver, Incident, Vehicle
+from app.api.deps import get_db, require_fleet_admin
+from app.models import Driver, Incident, User, Vehicle
 
 router = APIRouter()
 
 
 @router.get("/safety-trend")
-def safety_trend(db: Session = Depends(get_db)):
+def safety_trend(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     """Real trend computed from current data: since this demo has a single
     point-in-time snapshot rather than months of history, each of the last
     9 three-day buckets uses the fleet's current average safety score with
@@ -37,7 +37,7 @@ def safety_trend(db: Session = Depends(get_db)):
 
 
 @router.get("/incident-breakdown")
-def incident_breakdown(db: Session = Depends(get_db)):
+def incident_breakdown(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     incidents = db.query(Incident).all()
     counts = Counter(inc.type for inc in incidents)
     label_map = {
@@ -55,7 +55,7 @@ def incident_breakdown(db: Session = Depends(get_db)):
 
 
 @router.get("/driver-leaderboard")
-def driver_leaderboard(db: Session = Depends(get_db)):
+def driver_leaderboard(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     drivers = db.query(Driver).order_by(Driver.safety_score.desc()).all()
     return [
         {
@@ -70,7 +70,7 @@ def driver_leaderboard(db: Session = Depends(get_db)):
 
 
 @router.get("/fleet-utilization")
-def fleet_utilization(db: Session = Depends(get_db)):
+def fleet_utilization(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     vehicles = db.query(Vehicle).all()
     active = sum(1 for v in vehicles if v.status == "active")
     idle = sum(1 for v in vehicles if v.status == "idle")

@@ -12,3 +12,8 @@ export async function getDriverById(id: string): Promise<Driver | undefined> {
   if (USE_MOCK_DATA) return mockDelay(mockDrivers.find((d) => d.id === id));
   return apiClient.get<Driver>(`/drivers/${id}`);
 }
+
+export async function getMyDriverProfile(): Promise<Driver> {
+  if (USE_MOCK_DATA) return mockDelay(mockDrivers[0]);
+  return apiClient.get<Driver>('/auth/me/driver-profile');
+}

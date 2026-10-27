@@ -1,10 +1,17 @@
+"""Incidents endpoints — fleet manager access required for all operations.
+
+Drivers cannot list, create, modify, or delete incidents via the API.
+The AI monitoring pipeline creates incidents internally; fleet managers
+review and manage them here.
+"""
+
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user_optional, get_db
+from app.api.deps import get_current_driver, get_current_user_optional, get_db, require_fleet_admin
 from app.models import Driver, Evidence, Incident, SafetyEvent, Trip, User, Vehicle
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 from app.services.serializers import incident_to_dict
@@ -27,7 +34,9 @@ def list_incidents(
     offset: int = Query(default=0, ge=0),
     has_video: bool | None = Query(default=None),
     db: Session = Depends(get_db),
+    _admin: User = Depends(require_fleet_admin),
 ):
+    """List incidents — fleet managers only."""
     query = db.query(Incident).order_by(Incident.timestamp.desc())
     if has_video is not None:
         if has_video:
@@ -44,8 +53,32 @@ def list_incidents(
     ]
 
 
+@router.get("/mine")
+def list_my_incidents(
+    db: Session = Depends(get_db),
+    driver: Driver = Depends(get_current_driver),
+):
+    """Driver-accessible incidents for the authenticated driver only."""
+    incidents = (
+        db.query(Incident)
+        .filter(Incident.driver_id == driver.id)
+        .order_by(Incident.timestamp.desc())
+        .all()
+    )
+    vehicle_map = {v.id: v for v in db.query(Vehicle).all()}
+    return [
+        incident_to_dict(i, driver, vehicle_map.get(i.vehicle_id))
+        for i in incidents
+    ]
+
+
 @router.post("", status_code=201)
-def create_incident(payload: IncidentCreate, db: Session = Depends(get_db)):
+def create_incident(
+    payload: IncidentCreate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_fleet_admin),
+):
+    """Create an incident — fleet managers only."""
     driver, vehicle = _lookup(db, payload.driverId, payload.vehicleId)
     if not driver:
         raise HTTPException(status_code=404, detail=f"Driver '{payload.driverId}' not found")
@@ -75,7 +108,13 @@ def create_incident(payload: IncidentCreate, db: Session = Depends(get_db)):
 
 
 @router.patch("/{incident_id}")
-def update_incident(incident_id: str, payload: IncidentUpdate, db: Session = Depends(get_db)):
+def update_incident(
+    incident_id: str,
+    payload: IncidentUpdate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_fleet_admin),
+):
+    """Update incident status/acknowledgement — fleet managers only."""
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
@@ -102,7 +141,14 @@ async def delete_incident(
     if not incident:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
 
-    if current_user and current_user.role not in ("fleet_admin", "admin", "manager"):
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required to delete incidents",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if current_user.role not in ("fleet_admin", "admin", "manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only fleet managers and admins can delete incidents",

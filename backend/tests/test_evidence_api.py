@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_current_user, get_db
+from app.api.routes.evidence import _require_evidence_manager
 from app.core.config import settings
 from app.db.session import Base
 from app.main import app
@@ -47,6 +48,7 @@ class TestEvidenceAPI(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_current_user] = lambda: User(id="u-admin", email="admin@fleetguard.demo", role="fleet_admin", full_name="Admin")
+        app.dependency_overrides[_require_evidence_manager] = lambda: User(id="u-admin", email="admin@fleetguard.demo", role="fleet_admin", full_name="Admin")
         self.client = TestClient(app)
 
         # Seed initial Driver, Vehicle, Incident

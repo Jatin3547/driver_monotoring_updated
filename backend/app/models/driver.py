@@ -27,6 +27,11 @@ class Driver(Base):
     total_distance_km: Mapped[float] = mapped_column(Float, default=0)
     incident_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Optional link to a User account (populated for driver-role users)
+    user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id"), nullable=True, index=True
+    )
+
     assigned_vehicle_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("vehicles.id"), nullable=True
     )

@@ -20,8 +20,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.factory import ai_status, get_detector, get_driver_status, get_video_frame
-from app.api.deps import get_db
-from app.models import Driver, SafetyEvent, Vehicle
+from app.api.deps import get_db, require_fleet_admin
+from app.models import Driver, SafetyEvent, User, Vehicle
 from app.services.safety_engine import process_detection
 from app.services.serializers import safety_event_to_dict
 
@@ -31,7 +31,7 @@ _ONLINE_STATUSES = {"active", "on-trip"}
 
 
 @router.get("/status")
-def monitoring_status(db: Session = Depends(get_db)):
+def monitoring_status(db: Session = Depends(get_db), _admin: User = Depends(require_fleet_admin)):
     drivers = [d for d in db.query(Driver).all() if d.status in _ONLINE_STATUSES and d.assigned_vehicle_id]
     results = []
     for driver in drivers:
@@ -42,12 +42,12 @@ def monitoring_status(db: Session = Depends(get_db)):
 
 
 @router.get("/ai-status")
-def monitoring_ai_status():
+def monitoring_ai_status(_admin: User = Depends(require_fleet_admin)):
     return ai_status()
 
 
 @router.get("/thresholds")
-def monitoring_thresholds():
+def monitoring_thresholds(_admin: User = Depends(require_fleet_admin)):
     """Returns configurable AI detection thresholds, durations, and inference intervals."""
     from app.core.config import settings
 
@@ -71,7 +71,7 @@ def monitoring_thresholds():
 
 
 @router.get("/video-feed")
-def monitoring_video_feed():
+def monitoring_video_feed(_admin: User = Depends(require_fleet_admin)):
     def frame_stream():
         while True:
             frame_bytes = get_video_frame()
@@ -95,7 +95,7 @@ def monitoring_video_feed():
 
 
 @router.get("/current-snapshot")
-def monitoring_current_snapshot():
+def monitoring_current_snapshot(_admin: User = Depends(require_fleet_admin)):
     """Returns freshest live JPEG camera frame for incident evidence snapshots."""
     detector = get_detector()
     frame_bytes = None
@@ -122,7 +122,7 @@ def monitoring_current_snapshot():
 
 
 @router.post("/release-camera")
-def release_camera():
+def release_camera(_admin: User = Depends(require_fleet_admin)):
     """Explicitly releases any backend cv2 hardware capture lock so the browser can access it."""
     detector = get_detector()
     if detector and hasattr(detector, "camera") and hasattr(detector.camera, "release_hardware"):
@@ -132,7 +132,7 @@ def release_camera():
 
 
 @router.get("/probe-network-camera")
-def probe_network_camera(url: str = "http://192.168.0.4:4747/video"):
+def probe_network_camera(url: str = "http://192.168.0.4:4747/video", _admin: User = Depends(require_fleet_admin)):
     """Quick probe to test if DroidCam Wi-Fi stream or IP camera is reachable on the local network."""
     import socket
     from urllib.parse import urlparse
@@ -163,7 +163,7 @@ def probe_network_camera(url: str = "http://192.168.0.4:4747/video"):
 
 
 @router.post("/select-source")
-async def select_camera_source(request: Request):
+async def select_camera_source(request: Request, _admin: User = Depends(require_fleet_admin)):
     """Allows dynamically switching camera source in the backend (e.g. DroidCam Wi-Fi vs Laptop/USB webcam)."""
     data = await request.json()
     source_type = data.get("sourceType") or data.get("source", "")
@@ -185,7 +185,7 @@ async def select_camera_source(request: Request):
 
 
 @router.post("/camera-frame")
-async def push_camera_frame(request: Request):
+async def push_camera_frame(request: Request, _admin: User = Depends(require_fleet_admin)):
     """Receives a JPEG camera frame uploaded directly from browser / USB bridge."""
     detector = get_detector()
     if detector is None or not hasattr(detector, "camera"):
@@ -211,7 +211,7 @@ async def push_camera_frame(request: Request):
 
 
 @router.get("/events")
-def monitoring_events(db: Session = Depends(get_db), limit: int = 25):
+def monitoring_events(db: Session = Depends(get_db), limit: int = 25, _admin: User = Depends(require_fleet_admin)):
     from app.ai.factory import active_source
 
     detector = get_detector()

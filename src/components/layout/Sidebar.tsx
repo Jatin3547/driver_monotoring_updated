@@ -9,10 +9,13 @@ import {
   BarChart3,
   Settings,
   ShieldCheck,
+  Car,
 } from 'lucide-react';
 import { APP_NAME } from '@/utils/constants';
+import { useAuth } from '@/hooks/useAuth';
+import { isManagerRole, isDriverRole } from '@/utils/roles';
 
-const navItems = [
+const managerNavItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/drivers', label: 'Drivers', icon: Users },
   { to: '/vehicles', label: 'Vehicles', icon: Truck },
@@ -23,7 +26,26 @@ const navItems = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
+const driverNavItems = [
+  { to: '/driver', label: 'My Dashboard', icon: Car, end: true },
+  { to: '/settings', label: 'Settings', icon: Settings },
+];
+
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () => void }) {
+  const { user } = useAuth();
+
+  const navItems =
+    user && isDriverRole(user.role)
+      ? driverNavItems
+      : managerNavItems;
+
+  const roleLabel =
+    user && isDriverRole(user.role)
+      ? 'Driver Portal'
+      : user && isManagerRole(user.role)
+        ? 'Fleet Manager'
+        : 'Fleet & Driver Safety';
+
   return (
     <aside
       className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-brand-navy text-slate-100 flex flex-col transition-transform duration-200 ${
@@ -36,7 +58,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
         </span>
         <div className="leading-tight">
           <p className="text-sm font-semibold text-white">{APP_NAME}</p>
-          <p className="text-[11px] text-slate-400">Fleet &amp; Driver Safety</p>
+          <p className="text-[11px] text-slate-400">{roleLabel}</p>
         </div>
       </div>
 
@@ -61,11 +83,13 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
         ))}
       </nav>
 
-      <div className="p-4 border-t border-white/10 text-[11px] text-slate-500">
-        Phase 1 — Frontend preview
-        <br />
-        Backend connection pending
-      </div>
+      {user && (
+        <div className="p-4 border-t border-white/10 text-[11px] text-slate-500 truncate">
+          <span className="text-slate-400">{user.full_name}</span>
+          <br />
+          {user.email}
+        </div>
+      )}
     </aside>
   );
 }

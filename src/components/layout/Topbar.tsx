@@ -8,6 +8,7 @@ import { useAsyncData } from '@/hooks/useAsyncData';
 import { getAlerts } from '@/services/api/incidentService';
 import { useAuth } from '@/hooks/useAuth';
 import { USE_MOCK_DATA } from '@/services/config';
+import { isManagerRole } from '@/utils/roles';
 import { Badge } from '@/components/ui/Badge';
 import { severityTone } from '@/utils/statusColors';
 import { timeAgo } from '@/utils/formatDate';
@@ -16,9 +17,15 @@ import { MONITORING_EVENT_LABELS } from '@/utils/constants';
 export function Topbar({ onMenuClick, title }: { onMenuClick: () => void; title: string }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
-  const { data: alerts } = useAsyncData(() => getAlerts(), []);
-  const navigate = useNavigate();
   const { logout, user } = useAuth();
+  const navigate = useNavigate();
+  const isManager = isManagerRole(user?.role);
+
+  // Only fetch fleet-wide alerts for manager users
+  const { data: alerts } = useAsyncData(
+    () => (isManager ? getAlerts() : Promise.resolve([])),
+    [isManager],
+  );
 
   const unreadCount = alerts?.filter((a) => !a.read).length ?? 0;
 
@@ -40,55 +47,58 @@ export function Topbar({ onMenuClick, title }: { onMenuClick: () => void; title:
         <BackendStatusBadge />
         <WebSocketStatusBadge />
 
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => {
-              setNotifOpen((v) => !v);
-              setUserOpen(false);
-            }}
-            aria-label="Notifications"
-            className="relative w-9 h-9 flex items-center justify-center rounded-md border border-border text-text-secondary hover:bg-surface-inset transition-colors"
-          >
-            <Bell size={16} />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-status-danger-text text-white text-[10px] font-semibold flex items-center justify-center">
-                {unreadCount}
-              </span>
-            )}
-          </button>
-          {notifOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
-              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                <span className="text-sm font-semibold text-text-primary">Alerts</span>
-                <span className="text-xs text-text-muted">{unreadCount} unread</span>
-              </div>
-              <div className="max-h-80 overflow-y-auto">
-                {(alerts ?? []).slice(0, 6).map((alert) => (
-                  <div key={alert.id} className="px-4 py-3 border-b border-border last:border-0 flex gap-3">
-                    <Badge label="" dot tone={severityTone(alert.severity)} />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-text-primary leading-snug">{alert.message}</p>
-                      <p className="text-[11px] text-text-muted mt-1">
-                        {MONITORING_EVENT_LABELS[alert.type] ?? alert.type} · {timeAgo(alert.timestamp)}
-                      </p>
+        {/* Notifications — fleet managers only */}
+        {isManager && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setNotifOpen((v) => !v);
+                setUserOpen(false);
+              }}
+              aria-label="Notifications"
+              className="relative w-9 h-9 flex items-center justify-center rounded-md border border-border text-text-secondary hover:bg-surface-inset transition-colors"
+            >
+              <Bell size={16} />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-status-danger-text text-white text-[10px] font-semibold flex items-center justify-center">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            {notifOpen && (
+              <div className="absolute right-0 mt-2 w-80 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                  <span className="text-sm font-semibold text-text-primary">Alerts</span>
+                  <span className="text-xs text-text-muted">{unreadCount} unread</span>
+                </div>
+                <div className="max-h-80 overflow-y-auto">
+                  {(alerts ?? []).slice(0, 6).map((alert) => (
+                    <div key={alert.id} className="px-4 py-3 border-b border-border last:border-0 flex gap-3">
+                      <Badge label="" dot tone={severityTone(alert.severity)} />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-text-primary leading-snug">{alert.message}</p>
+                        <p className="text-[11px] text-text-muted mt-1">
+                          {MONITORING_EVENT_LABELS[alert.type] ?? alert.type} · {timeAgo(alert.timestamp)}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNotifOpen(false);
+                    navigate('/incidents');
+                  }}
+                  className="w-full text-center text-xs font-medium text-brand-blue py-2.5 hover:bg-surface-inset"
+                >
+                  View all incidents
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setNotifOpen(false);
-                  navigate('/incidents');
-                }}
-                className="w-full text-center text-xs font-medium text-brand-blue py-2.5 hover:bg-surface-inset"
-              >
-                View all incidents
-              </button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         <ThemeToggle />
 
@@ -105,7 +115,7 @@ export function Topbar({ onMenuClick, title }: { onMenuClick: () => void; title:
               <User size={14} />
             </span>
             <span className="text-sm font-medium text-text-primary hidden sm:inline">
-              {!USE_MOCK_DATA && user ? user.full_name : 'Fleet Admin'}
+              {user ? user.full_name : 'Guest'}
             </span>
           </button>
           {userOpen && (
