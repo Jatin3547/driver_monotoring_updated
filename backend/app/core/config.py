@@ -33,6 +33,11 @@ class Settings(_BaseSettings):
 
     # Simulation / AI mode switches: Default to "live" so AI driver monitoring works out-of-the-box
     gps_mode: str = "simulation"
+    gps_update_interval_seconds: float = 5.0
+    gps_min_update_distance_meters: float = 15.0
+    gps_min_server_interval_seconds: float = 2.0
+    gps_stale_after_seconds: int = 30
+    gps_max_accuracy_meters: float = 10000.0
     ai_mode: str = "live"
     ai_camera_index: int | str = "http://192.168.0.4:4747/video,1,0"
     ai_event_cooldown_seconds: int = 30  # min gap between incidents of the same type for the same driver
@@ -45,8 +50,17 @@ class Settings(_BaseSettings):
     ai_eye_closure_warning_seconds: float = 0.5
     ai_yawn_duration_seconds: float = 1.0
     ai_distraction_duration_seconds: float = 1.5
+    ai_blink_warning_seconds: float = 0.25
+    ai_yawn_warning_seconds: float = 0.5
+    ai_distraction_warning_seconds: float = 0.8
     ai_absence_grace_seconds: float = 2.5
+    ai_phone_dropout_grace_seconds: float = 1.0
     ai_target_fps: int = 15
+    ai_browser_frame_interval_seconds: float = 0.45
+    ai_browser_frame_width: int = 320
+    ai_browser_frame_height: int = 240
+    ai_browser_jpeg_quality: float = 0.55
+    ai_browser_event_cooldown_seconds: float = 10.0
     ai_camera_reconnect_max_retries: int = 5
 
     # Phone Detection Settings (Pretrained YOLOv8)

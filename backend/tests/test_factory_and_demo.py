@@ -25,7 +25,9 @@ class TestAIFactoryAndDemo(unittest.TestCase):
 
     def test_structured_driver_status_contract(self):
         """get_driver_status returns structured dictionary matching frontend contract."""
-        status = get_driver_status("DRV-001", "VEH-001")
+        with patch.object(settings, "ai_mode", "simulation"):
+            shutdown_detector()
+            status = get_driver_status("DRV-001", "VEH-001")
 
         required_keys = {
             "driverId", "vehicleId", "isOnline", "presenceDetected",

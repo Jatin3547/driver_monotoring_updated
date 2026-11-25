@@ -1,6 +1,7 @@
 """Unit tests for PhoneDetector and spatial driver interaction heuristics."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import numpy as np
 
@@ -70,6 +71,68 @@ class TestPhoneDetectorUnit(unittest.TestCase):
         self.assertIn("confidenceThreshold", diag)
         self.assertIn("avgInferenceMs", diag)
         self.assertEqual(diag["model"], "yolov8n.pt")
+
+    def test_sync_inference_filters_confidence_and_returns_phone_metadata(self):
+        """The pretrained detector asks only for COCO phone class and applies its configured score floor."""
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        class FakeBox:
+            def __init__(self, confidence, coords):
+                self.conf = [SimpleNamespace(item=lambda: confidence)]
+                self.xyxy = [SimpleNamespace(cpu=lambda: SimpleNamespace(
+                    numpy=lambda: np.asarray(coords),
+                ))]
+
+        model = MagicMock()
+        model.predict.return_value = [SimpleNamespace(boxes=[FakeBox(0.34, [320, 120, 370, 240])])]
+        self.detector.model = model
+        below_threshold = self.detector._sync_predict(frame, (220, 100, 360, 280))
+        self.assertFalse(below_threshold.detected)
+        self.assertEqual(len(model.predict.call_args_list), 1)
+        self.assertIs(model.predict.call_args.args[0], frame)
+        self.assertEqual(model.predict.call_args.kwargs, {
+            "imgsz": self.detector.input_size, "classes": [PhoneDetector.CELL_PHONE_CLASS_ID],
+            "conf": 0.35, "verbose": False,
+        })
+
+        model.reset_mock()
+        model.predict.return_value = [SimpleNamespace(boxes=[FakeBox(0.82, [320, 120, 370, 240])])]
+        above_threshold = self.detector._sync_predict(frame, (220, 100, 360, 280))
+        self.assertTrue(above_threshold.detected)
+        self.assertTrue(above_threshold.in_driver_zone)
+        self.assertEqual(above_threshold.confidence, 0.82)
+        self.assertEqual(above_threshold.bbox, (320, 120, 370, 240))
+        self.assertEqual(above_threshold.orientation, "portrait")
+        diagnostics = self.detector.get_diagnostics()
+        self.assertEqual(diagnostics["inferenceCount"], 2)
+        self.assertTrue(diagnostics["inferenceAttempted"])
+        self.assertEqual(diagnostics["detectionCount"], 1)
+        self.assertEqual(diagnostics["detectedClassId"], PhoneDetector.CELL_PHONE_CLASS_ID)
+        self.assertTrue(diagnostics["driverZone"])
+        self.assertTrue(diagnostics["phoneAccepted"])
+        self.assertIsNone(diagnostics["rejectionReason"])
+        self.assertEqual(diagnostics["bbox"], [320, 120, 370, 240])
+        self.assertGreaterEqual(diagnostics["lastInferenceMs"], 0)
+
+    def test_detected_phone_outside_driver_zone_is_reported_as_rejected(self):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        class FakeBox:
+            conf = [SimpleNamespace(item=lambda: 0.82)]
+            xyxy = [SimpleNamespace(cpu=lambda: SimpleNamespace(
+                numpy=lambda: np.asarray([520, 120, 580, 240]),
+            ))]
+
+        model = MagicMock()
+        model.predict.return_value = [SimpleNamespace(boxes=[FakeBox()])]
+        self.detector.model = model
+        detection = self.detector._sync_predict(frame, (100, 100, 180, 180))
+
+        self.assertTrue(detection.detected)
+        self.assertFalse(detection.in_driver_zone)
+        diagnostics = self.detector.get_diagnostics()
+        self.assertFalse(diagnostics["phoneAccepted"])
+        self.assertEqual(diagnostics["rejectionReason"], "outside_driver_zone")
 
     def test_unavailable_detector_honest_reporting(self):
         """When model fails to load, detector reports available=False and explicit error."""

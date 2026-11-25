@@ -71,6 +71,19 @@ class TestSafetyEngine(unittest.TestCase):
         events = self.db.query(SafetyEvent).all()
         self.assertEqual(len(events), 1)
 
+    def test_rule_event_stores_measurement_without_confidence(self):
+        detection = DetectionResult(
+            event_type="drowsiness", severity="high", confidence=None, source="live",
+            duration_seconds=0.7, metrics={"ear": 0.12},
+        )
+        result = process_detection(self.db, self.driver, self.vehicle, detection, capture_evidence=False)
+        self.assertIsNone(result["event"].model_confidence)
+        self.assertEqual(result["event"].duration_seconds, 0.7)
+        self.assertEqual(result["event"].metrics, {"ear": 0.12})
+        self.assertEqual(result["event"].recovery_state, "detected")
+        self.assertIn("temporal signal rules", result["incident"].description)
+        self.assertNotIn("confidence", result["incident"].description)
+
     def test_high_severity_escalates_to_incident_and_alert(self):
         """High severity detections escalate to Incident and Alert and bump incident count."""
         detection = DetectionResult(

@@ -9,6 +9,7 @@ there is exactly one place to update if the contract ever changes.
 from datetime import datetime, timezone
 
 from app.models import Alert, Driver, GPSLocation, Incident, SafetyEvent, Vehicle
+from app.core.config import settings
 
 
 def _iso(dt: datetime) -> str:
@@ -137,17 +138,28 @@ def alert_to_dict(a: Alert, driver: Driver | None, vehicle: Vehicle | None) -> d
     }
 
 
-def gps_to_dict(g: GPSLocation, vehicle_code: str) -> dict:
+def gps_to_dict(g: GPSLocation, vehicle_code: str, driver_code: str | None = None) -> dict:
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - _aware(g.timestamp)).total_seconds())
+    live = g.source == "live"
+    stale = age_seconds > settings.gps_stale_after_seconds
     return {
         "vehicleId": vehicle_code,
+        "driverId": driver_code,
         "lat": g.latitude,
         "lng": g.longitude,
-        "speedKmh": g.speed_kmh,
-        "heading": g.heading,
+        "speedKmh": getattr(g, "reported_speed_kmh", None) if g.source == "live" else g.speed_kmh,
+        "heading": getattr(g, "reported_heading", None) if g.source == "live" else g.heading,
         "accelerationMs2": g.acceleration_ms2,
+        "accuracyM": getattr(g, "accuracy_m", None),
         "source": g.source,
+        "gpsStatus": "stale" if stale else ("live" if live else "simulated"),
+        "staleAfterSeconds": settings.gps_stale_after_seconds,
         "timestamp": _iso(g.timestamp),
     }
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def safety_event_to_dict(e: SafetyEvent, driver_code: str, vehicle_code: str) -> dict:
@@ -157,7 +169,10 @@ def safety_event_to_dict(e: SafetyEvent, driver_code: str, vehicle_code: str) ->
         "vehicleId": vehicle_code,
         "type": e.event_type,
         "severity": e.severity,
-        "confidence": e.confidence,
+        "confidence": getattr(e, "model_confidence", None),
+        "durationSeconds": getattr(e, "duration_seconds", None),
+        "metrics": getattr(e, "metrics", None),
+        "recoveryState": getattr(e, "recovery_state", None),
         "source": e.source,
         "timestamp": _iso(e.timestamp),
         "snapshotUrl": e.snapshot_url,

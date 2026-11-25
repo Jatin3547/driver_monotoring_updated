@@ -12,9 +12,7 @@ def _uuid() -> str:
 
 
 class GPSLocation(Base):
-    """One GPS ping. Populated by the GPS simulator in dev/demo mode (see
-    app/gps/simulator.py) — real hardware ingestion is not implemented,
-    see README."""
+    """A timestamped simulated or authenticated browser GPS position."""
 
     __tablename__ = "gps_locations"
 
@@ -25,6 +23,9 @@ class GPSLocation(Base):
     speed_kmh: Mapped[float] = mapped_column(Float, default=0)
     heading: Mapped[float] = mapped_column(Float, default=0)
     acceleration_ms2: Mapped[float] = mapped_column(Float, default=0)
+    accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reported_speed_kmh: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reported_heading: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String, default="simulation")  # simulation|live
     timestamp: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True

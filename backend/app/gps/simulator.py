@@ -6,8 +6,8 @@ base point. Every reading this module produces is persisted to the
 `gps_locations` table with `source="simulation"` so it is never
 indistinguishable from a real GPS ingestion pipeline in the data itself.
 
-Real hardware/device integration (GPS_MODE=live) is NOT implemented — see
-README "GPS Tracking" section for what that would require.
+Browser positions are ingested separately by the authenticated /gps/my-location
+endpoint. GPS_MODE=live disables this simulator as a fallback.
 """
 
 import math

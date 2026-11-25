@@ -30,6 +30,12 @@ class DriverTemporalTracker:
         self._phone_use_start: Optional[float] = None
         self._last_phone_detection_time: Optional[float] = None
         self._last_face_time: float = 0.0
+        self._absence_event_emitted = False
+        self._eye_warning_emitted = False
+        self._drowsiness_event_emitted = False
+        self._yawn_event_emitted = False
+        self._distraction_event_emitted = False
+        self._phone_event_emitted = False
 
         # State outputs
         self.eye_state: str = "normal"          # normal | warning | critical
@@ -68,20 +74,30 @@ class DriverTemporalTracker:
                 self.phone_use_status = "no-signal"
                 self._phone_use_start = None
                 self._last_phone_detection_time = None
+                self._phone_event_emitted = False
                 self._eye_closure_start = None
-                detections.append(
+                self._yawn_start = None
+                self._distraction_start = None
+                self._smoothed_ear = None
+                self._smoothed_mar = None
+                self._smoothed_yaw = None
+                if not self._absence_event_emitted:
+                    self._absence_event_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="no_presence",
                         severity="high",
-                        confidence=0.95,
+                        confidence=None,
                         source="live",
+                        duration_seconds=absence_duration,
                     )
-                )
+                    )
             return detections
 
         # Face is present: reset absence timer
         self._last_face_time = timestamp
         self.presence_detected = True
+        self._absence_event_emitted = False
 
         # 2. Metrics for Threshold Detection and Display
         ear = features.ear
@@ -102,27 +118,34 @@ class DriverTemporalTracker:
             if closure_duration >= settings.ai_drowsiness_duration_seconds:
                 self.drowsiness_level = "critical"
                 self.eye_state = "critical"
-                confidence = min(1.0, 0.70 + (closure_duration - settings.ai_drowsiness_duration_seconds) * 0.15)
-                detections.append(
+                if not self._drowsiness_event_emitted:
+                    self._drowsiness_event_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="drowsiness",
                         severity="high",
-                        confidence=round(confidence, 2),
+                        confidence=None,
                         source="live",
+                        duration_seconds=closure_duration,
+                        metrics={"ear": round(ear, 3)},
                     )
-                )
+                    )
             elif closure_duration >= settings.ai_eye_closure_warning_seconds:
                 self.drowsiness_level = "warning"
                 self.eye_state = "warning"
-                detections.append(
+                if not self._eye_warning_emitted:
+                    self._eye_warning_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="eye_closure",
                         severity="medium",
-                        confidence=round(min(0.9, 0.5 + closure_duration * 0.3), 2),
+                        confidence=None,
                         source="live",
+                        duration_seconds=closure_duration,
+                        metrics={"ear": round(ear, 3)},
                     )
-                )
-            elif closure_duration >= 0.25:
+                    )
+            elif closure_duration >= settings.ai_blink_warning_seconds:
                 # Eyes closed longer than normal blink (>0.25s) -> immediate visual response
                 self.eye_state = "warning"
                 self.drowsiness_level = "normal"
@@ -132,6 +155,8 @@ class DriverTemporalTracker:
                 self.eye_state = "normal"
         else:
             self._eye_closure_start = None
+            self._eye_warning_emitted = False
+            self._drowsiness_event_emitted = False
             self.eye_state = "normal"
             self.drowsiness_level = "normal"
 
@@ -144,22 +169,26 @@ class DriverTemporalTracker:
 
             if yawn_duration >= settings.ai_yawn_duration_seconds:
                 self.yawn_status = "critical"
-                confidence = min(0.98, 0.75 + (yawn_duration - settings.ai_yawn_duration_seconds) * 0.1)
-                detections.append(
+                if not self._yawn_event_emitted:
+                    self._yawn_event_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="yawning",
                         severity="high",
-                        confidence=round(confidence, 2),
+                        confidence=None,
                         source="live",
+                        duration_seconds=yawn_duration,
+                        metrics={"mar": round(mar, 3)},
                     )
-                )
-            elif yawn_duration >= 0.5:
+                    )
+            elif yawn_duration >= settings.ai_yawn_warning_seconds:
                 self.yawn_status = "warning"
             else:
                 # Brief mouth opening (< 0.5s), typical of speech
                 self.yawn_status = "normal"
         else:
             self._yawn_start = None
+            self._yawn_event_emitted = False
             self.yawn_status = "normal"
 
         # 5. Distraction Analysis (Head Yaw)
@@ -171,21 +200,25 @@ class DriverTemporalTracker:
 
             if distraction_duration >= settings.ai_distraction_duration_seconds:
                 self.distraction_status = "critical"
-                confidence = min(0.95, 0.70 + (distraction_duration - settings.ai_distraction_duration_seconds) * 0.1)
-                detections.append(
+                if not self._distraction_event_emitted:
+                    self._distraction_event_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="distraction",
                         severity="medium",
-                        confidence=round(confidence, 2),
+                        confidence=None,
                         source="live",
+                        duration_seconds=distraction_duration,
+                        metrics={"headYaw": round(yaw, 1)},
                     )
-                )
-            elif distraction_duration >= 0.8:
+                    )
+            elif distraction_duration >= settings.ai_distraction_warning_seconds:
                 self.distraction_status = "warning"
             else:
                 self.distraction_status = "normal"
         else:
             self._distraction_start = None
+            self._distraction_event_emitted = False
             self.distraction_status = "normal"
 
         # 6. Phone Detection & Distraction Analysis
@@ -194,23 +227,27 @@ class DriverTemporalTracker:
             self.phone_use_status = "no-signal"
             self._phone_use_start = None
             self._last_phone_detection_time = None
+            self._phone_event_emitted = False
         elif not phone_detection.detected:
             # Detector ran, but no phone detected in this frame
-            if self._last_phone_detection_time is not None and (timestamp - self._last_phone_detection_time) < 1.0:
+            if self._last_phone_detection_time is not None and (timestamp - self._last_phone_detection_time) < settings.ai_phone_dropout_grace_seconds:
                 # Temporal debounce: allow brief dropouts (< 1.0s) without resetting state
                 pass
             else:
                 self._phone_use_start = None
                 self._last_phone_detection_time = None
                 self.phone_use_status = "normal"
+                self._phone_event_emitted = False
         elif not phone_detection.in_driver_zone:
             # Phone detected in the cab, but NOT in the driver's hand/ear interaction zone
-            if self._last_phone_detection_time is not None and (timestamp - self._last_phone_detection_time) < 1.0:
+            if self._last_phone_detection_time is not None and (timestamp - self._last_phone_detection_time) < settings.ai_phone_dropout_grace_seconds:
                 pass
             else:
                 self._phone_use_start = None
                 self._last_phone_detection_time = None
                 self.phone_use_status = "normal"
+                self._phone_event_emitted = False
+                self._phone_event_emitted = False
         else:
             # Phone detected AND within the driver interaction zone
             self._last_phone_detection_time = timestamp
@@ -221,15 +258,22 @@ class DriverTemporalTracker:
 
             if phone_duration >= settings.ai_phone_usage_duration_seconds:
                 self.phone_use_status = "critical"
-                confidence = min(0.99, max(0.50, float(phone_detection.confidence)))
-                detections.append(
+                confidence = float(phone_detection.confidence)
+                if not self._phone_event_emitted:
+                    self._phone_event_emitted = True
+                    detections.append(
                     DetectionResult(
                         event_type="phone_use",
                         severity="high",
-                        confidence=round(confidence, 2),
+                        confidence=confidence,
                         source="live",
+                        duration_seconds=phone_duration,
+                        metrics={
+                            "bbox": list(phone_detection.bbox) if phone_detection.bbox is not None else None,
+                            "inDriverZone": True,
+                        },
                     )
-                )
+                    )
             elif phone_duration >= settings.ai_phone_warning_duration_seconds:
                 self.phone_use_status = "warning"
             else:
@@ -248,16 +292,20 @@ class DriverTemporalTracker:
     def reset(self) -> None:
         """Reset temporal state counters."""
         self._eye_closure_start = None
-        self._last_eye_closure_time = None
         self._yawn_start = None
         self._distraction_start = None
         self._phone_use_start = None
         self._last_phone_detection_time = None
         self._last_face_time = 0.0
+        self._absence_event_emitted = self._eye_warning_emitted = self._drowsiness_event_emitted = False
+        self._yawn_event_emitted = self._distraction_event_emitted = self._phone_event_emitted = False
+        self._smoothed_ear = None
+        self._smoothed_mar = None
+        self._smoothed_yaw = None
         self.eye_state = "normal"
         self.drowsiness_level = "normal"
         self.yawn_status = "normal"
-        self.phone_use_status = "normal"
+        self.phone_use_status = "no-signal"
         self.distraction_status = "normal"
         self.presence_detected = True
 

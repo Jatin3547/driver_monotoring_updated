@@ -134,6 +134,14 @@ Navigate to the **Monitoring** tab:
    - The buzzer silences **instantly** as soon as you are alert.
    - Yawning and background simulated drivers are filtered out and will not trigger the buzzer.
 
+### Driver dashboard browser AI session
+
+The driver dashboard can start an authenticated browser camera session. It sends JPEG frames (maximum 2 frames/second, 300 KB per frame, 1280×720 maximum) to the backend for MediaPipe and optional YOLO inference. The server associates the session and temporal safety state with the authenticated driver's linked profile. The camera is opt-in and stops when the driver stops the session or the page closes. Temporary network interruptions trigger bounded backoff and session recovery. Raw camera frames are processed in memory and are not saved. On a qualifying incident, the browser uploads a rolling 5-second pre-event plus 10-second post-event clip through a driver-authorized endpoint; drivers can upload only evidence for incidents linked to their own profile.
+
+The backend decodes each JPEG, extracts face landmarks with MediaPipe, computes EAR/MAR/head yaw, and applies per-driver temporal rules to reject short blinks and transient mouth openings. Sustained safety events flow through the safety engine into persisted events/incidents/alerts and WebSocket updates; the driver's page shows presence, eyes, drowsiness, yawning, phone use, attention, the latest event, and frame latency/rate. The browser and admin see explicit simulation, live, or unavailable modes. If `AI_MODE=live` cannot initialize a camera or the vision stack, the API reports unavailable instead of disguising synthetic values as live.
+
+This is the single-process prototype: one browser camera session can be active per backend process, and inference is serialized through shared model instances. Fleet managers can see active driver browser sessions on the Live Monitoring page. Live AI requires the optional packages in `backend/requirements-ai.txt`; if they are unavailable, the dashboard reports that it cannot start the AI session. Evidence upload also requires FFmpeg. No custom model training is performed; phone detection uses the configured pretrained YOLO model, and gaze-down detection is not implemented. Horizontal scaling and multiple simultaneous cameras require shared session state, an inference worker/queue, and per-camera capacity controls.
+
 ---
 
 ## 5. Environment Variables Reference
@@ -154,7 +162,14 @@ Navigate to the **Monitoring** tab:
 | `AI_CAMERA_INDEX` | `0` | Camera index (`0` = laptop webcam, or DroidCam stream URL) |
 | `AI_EAR_THRESHOLD` | `0.19` | Eye Aspect Ratio threshold for eye closure detection |
 | `AI_PHONE_DETECTION_ENABLED` | `True` | Enable pretrained YOLOv8 phone detection |
-| `GPS_MODE` | `simulation` | Deterministic realistic GPS vehicle route simulation |
+| `GPS_MODE` | `simulation` | `simulation` uses labeled demo positions; `live` disables simulated fallback |
+| `GPS_UPDATE_INTERVAL_SECONDS` | `5` | Target browser location update cadence |
+| `GPS_MIN_UPDATE_DISTANCE_METERS` | `15` | Movement needed for an early update (scaled up by reported accuracy) |
+| `GPS_MIN_SERVER_INTERVAL_SECONDS` | `2` | Server-side minimum interval protecting the ingestion endpoint |
+| `GPS_STALE_AFTER_SECONDS` | `30` | Time without a live update before location is marked stale |
+| `GPS_MAX_ACCURACY_METERS` | `10000` | Maximum accepted browser-reported accuracy; coarse fixes retain their reported accuracy |
+
+Drivers start location sharing explicitly from the Driver Dashboard. The browser Geolocation API is not invoked on page load. Live updates are authenticated and always attached to the signed-in driver's currently assigned vehicle. Manager-only fleet GPS endpoints and the existing manager WebSocket deliver positions to the Admin map. Live positions override simulation for that vehicle and remain visible as stale after the configured timeout; `GPS_MODE=live` does not fall back to simulated coordinates. Laptop/browser geolocation can be coarse and is not a substitute for dedicated vehicle GPS hardware.
 
 ---
 

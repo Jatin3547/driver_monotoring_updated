@@ -1,17 +1,16 @@
 """WebSocket endpoint: GET/WS /api/ws
 
 Broadcasts real-time events to every connected client:
-  - gps_update       (simulated vehicle positions, source="simulation")
+  - gps_update       (authenticated driver browser positions or labeled simulation positions)
   - monitoring_update (simulated driver monitoring status)
   - safety_event     (new AI detection, simulation or live per its own "source")
   - incident         (new incident created via the REST API)
   - alert            (new alert created via the REST API)
 
-All periodic push data in this project currently comes from the
-simulation engines (app/gps/simulator.py, app/ai/simulator.py) — there is
-no real hardware/camera feed wired in. Every broadcast payload carries a
-"source" field so the frontend (and any inspector) can tell simulated
-data from real data at a glance.
+Live driver GPS and browser-camera AI events use the authenticated backend
+pipeline. Simulated positions remain available according to GPS_MODE, and
+every GPS payload carries a source/freshness label so demo data cannot be
+mistaken for real driver location.
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect

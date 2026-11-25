@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, String, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -24,7 +24,11 @@ class SafetyEvent(Base):
     vehicle_id: Mapped[str] = mapped_column(String, ForeignKey("vehicles.id"), index=True)
     event_type: Mapped[str] = mapped_column(String)  # drowsiness|eye_closure|yawning|phone_use|distraction|no_presence
     severity: Mapped[str] = mapped_column(String)  # low|medium|high
-    confidence: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # legacy compatibility; not used for rule-based detections
+    model_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    recovery_state: Mapped[str | None] = mapped_column(String, nullable=True)
     source: Mapped[str] = mapped_column(String, default="simulation")  # simulation|live
     snapshot_url: Mapped[str | None] = mapped_column(String, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(

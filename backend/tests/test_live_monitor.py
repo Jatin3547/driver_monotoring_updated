@@ -76,6 +76,10 @@ class TestLiveMonitorTemporalLogic(unittest.TestCase):
         drowsy_events = [d for d in detections if d.event_type == "drowsiness"]
         self.assertEqual(len(drowsy_events), 1)
         self.assertEqual(drowsy_events[0].severity, "high")
+        self.assertIsNone(drowsy_events[0].confidence)
+        self.assertEqual(drowsy_events[0].metrics["ear"], 0.06)
+        repeated = self.tracker.update(self._features(ear=0.06), timestamp=t + 1.4)
+        self.assertFalse(any(d.event_type in {"eye_closure", "drowsiness"} for d in repeated))
         self.assertEqual(self.tracker.drowsiness_level, "critical")
 
         # Eye re-opens: returns to normal
@@ -150,6 +154,7 @@ class TestLiveMonitorTemporalLogic(unittest.TestCase):
         self.assertEqual(len(absence), 1)
         self.assertEqual(absence[0].severity, "high")
         self.assertFalse(self.tracker.presence_detected)
+        self.assertFalse(any(d.event_type == "no_presence" for d in self.tracker.update(None, timestamp=t + 3.2)))
 
         # Driver returns
         self.tracker.update(self._features(face_detected=True), timestamp=t + 4.0)
@@ -181,6 +186,7 @@ class TestLiveMonitorTemporalLogic(unittest.TestCase):
         phone_events = [d for d in detections if d.event_type == "phone_use"]
         self.assertEqual(len(phone_events), 1)
         self.assertEqual(phone_events[0].severity, "high")
+        self.assertEqual(phone_events[0].confidence, 0.88)
         self.assertEqual(self.tracker.phone_use_status, "critical")
 
         # Phone put away (no phone detected) -> after 1.0s grace period resets to normal

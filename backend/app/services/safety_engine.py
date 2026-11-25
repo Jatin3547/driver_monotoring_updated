@@ -41,7 +41,7 @@ def _aware(dt: datetime) -> datetime:
 
 
 def process_detection(
-    db: Session, driver: Driver, vehicle: Vehicle, detection: DetectionResult
+    db: Session, driver: Driver, vehicle: Vehicle, detection: DetectionResult, *, capture_evidence: bool = True
 ) -> dict:
     """Persists a SafetyEvent for every detection, and escalates to an
     Incident + Alert only when severity is "high" and the cooldown window
@@ -53,7 +53,11 @@ def process_detection(
         vehicle_id=vehicle.id,
         event_type=detection.event_type,
         severity=detection.severity,
-        confidence=detection.confidence,
+        confidence=detection.confidence if detection.confidence is not None else 0.0,
+        model_confidence=detection.confidence,
+        duration_seconds=detection.duration_seconds,
+        metrics=detection.metrics or None,
+        recovery_state="detected",
         source=detection.source,
         timestamp=datetime.now(timezone.utc),
     )
@@ -100,7 +104,11 @@ def process_detection(
         severity=detection.severity,
         status="open",
         location=f"{vehicle.plate_number} (live GPS not attached to this event)",
-        description=f"{label} detected ({detection.source}) at {round(detection.confidence * 100)}% confidence.",
+        description=(
+            f"{label} detected ({detection.source}) at {round(detection.confidence * 100)}% model confidence."
+            if detection.confidence is not None
+            else f"{label} detected ({detection.source}) by temporal signal rules."
+        ),
         timestamp=datetime.now(timezone.utc),
     )
     db.add(incident)
@@ -124,7 +132,7 @@ def process_detection(
 
     # ── Automatic evidence recording (fire-and-forget daemon thread) ──────
     # Only attempt for live detections — simulation mode has no real camera buffer.
-    if detection.source == "live":
+    if detection.source == "live" and capture_evidence:
         _schedule_evidence_for_incident(incident, driver, vehicle)
 
     return result

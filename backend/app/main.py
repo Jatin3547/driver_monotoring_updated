@@ -19,8 +19,9 @@ On startup this module:
          deduplication), and broadcasts "safety_event" /
          "incident_created" / "alert_created" accordingly.
 
-Every broadcast payload carries a "source" field ("simulation" or
-"live") so simulated data is never indistinguishable from real data.
+Every monitoring broadcast carries its actual source (simulation, server
+camera, driver browser camera, or none) so simulated data is never
+indistinguishable from real data.
 """
 
 import asyncio
@@ -33,16 +34,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai.factory import (
     active_source,
+    clear_browser_driver_state,
     get_detector,
     get_driver_status,
+    resume_fleet_camera_after_browser_session,
     shutdown_detector,
 )
+from app.ai.browser_sessions import browser_sessions
 from app.api.routes import api_router
 from app.core.config import settings
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.gps.simulator import record_position
-from app.models import Driver, SafetyEvent, Vehicle
+from app.models import Driver, GPSLocation, SafetyEvent, Vehicle
 from app.services.evidence_manager import run_retention_cleanup
 from app.services.safety_engine import process_detection
 from app.services.serializers import (
@@ -67,6 +71,11 @@ async def _broadcast_loop() -> None:
     while True:
         await asyncio.sleep(0.5)
         tick += 1
+        expired_browser_sessions = browser_sessions.expire_idle()
+        for _, session in expired_browser_sessions:
+            clear_browser_driver_state(session["driverCode"])
+        if expired_browser_sessions and not browser_sessions.list_active():
+            resume_fleet_camera_after_browser_session()
         if manager.connection_count == 0:
             continue
         db = SessionLocal()
@@ -78,31 +87,41 @@ async def _broadcast_loop() -> None:
                 except Exception as cleanup_exc:
                     logger.warning("Periodic retention cleanup: %s", cleanup_exc)
 
-            # --- GPS (runs every 5s = every 10 ticks of 0.5s) ---
-            if tick % 10 == 0:
+            # --- Simulation GPS refresh (5s cadence; never overwrites a live vehicle position) ---
+            if tick % 10 == 0 and settings.gps_mode.strip().lower() == "simulation":
                 vehicles = [v for v in db.query(Vehicle).all() if v.status not in _TRACKABLE_STATUSES_EXCLUDE]
                 for vehicle in vehicles:
+                    live_position = (
+                        db.query(GPSLocation.id)
+                        .filter(GPSLocation.vehicle_id == vehicle.id, GPSLocation.source == "live")
+                        .first()
+                    )
+                    if live_position:
+                        continue
                     loc = record_position(db, vehicle)
                     await manager.broadcast("gps_update", gps_to_dict(loc, vehicle.code))
 
+            source = active_source()
             online_drivers = [
                 d for d in db.query(Driver).all() if d.status in _ONLINE_STATUSES and d.assigned_vehicle_id
             ]
 
             # --- Monitoring status snapshot ---
-            for driver in online_drivers:
-                vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first()
-                if not vehicle:
-                    continue
-                status = get_driver_status(driver.code, vehicle.code)
-                await manager.broadcast("monitoring_update", status)
+            if source in {"simulation", "live"}:
+                status_drivers = [d for d in online_drivers if source == "simulation" or d.code == "DRV-001"]
+                for driver in status_drivers:
+                    vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first()
+                    if not vehicle:
+                        continue
+                    status = get_driver_status(driver.code, vehicle.code)
+                    await manager.broadcast("monitoring_update", status)
 
             # --- AI detection -> safety event -> incident/alert escalation ---
             detector = get_detector()
             target_drivers = (
                 [d for d in online_drivers if d.code == "DRV-001"]
-                if active_source() == "live"
-                else online_drivers[:_AI_DRIVERS_PER_TICK]
+                if source == "live"
+                else online_drivers[:_AI_DRIVERS_PER_TICK] if source == "simulation" else []
             )
             for driver in target_drivers:
                 recent = (

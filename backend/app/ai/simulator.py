@@ -71,12 +71,11 @@ class SimulatedDetector(BaseDetector):
             if level == "normal":
                 continue
             severity = "high" if level == "critical" else "medium"
-            confidence = round(0.6 + _seed(driver_code, signal + "conf") * 0.35, 2)
             results.append(
                 DetectionResult(
                     event_type=event_type,
                     severity=severity,
-                    confidence=confidence,
+                    confidence=None,
                     source="simulation",
                 )
             )

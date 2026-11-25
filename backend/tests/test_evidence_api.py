@@ -13,7 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_driver, get_current_user, get_db
 from app.api.routes.evidence import _require_evidence_manager
 from app.core.config import settings
 from app.db.session import Base
@@ -70,6 +70,19 @@ class TestEvidenceAPI(unittest.TestCase):
             self.incident_id = incident.id
             self.driver_id = driver.id
             self.vehicle_id = vehicle.id
+            other_driver = Driver(code="DRV-OTHER", name="Other Driver", license_number="L2", phone="456", email="other@d.com", joined_date=date(2026, 1, 1))
+            db.add(other_driver)
+            db.flush()
+            other_incident = Incident(
+                driver_id=other_driver.id,
+                vehicle_id=vehicle.id,
+                type="phone_use",
+                severity="high",
+                description="Other driver's incident",
+            )
+            db.add(other_incident)
+            db.commit()
+            self.other_incident_id = other_incident.id
 
         # Generate a small valid test WebM file for uploads using FFmpeg testsrc
         self.sample_webm_bytes = self._create_sample_webm()
@@ -173,6 +186,28 @@ class TestEvidenceAPI(unittest.TestCase):
         self.assertIn("usedMb", stats)
         self.assertIn("maxMb", stats)
         self.assertIn("quotaPercentage", stats)
+
+    def test_driver_can_upload_only_own_incident_evidence(self):
+        def override_current_driver():
+            with self.Session() as db:
+                yield db.query(Driver).filter(Driver.id == self.driver_id).first()
+
+        app.dependency_overrides[get_current_driver] = override_current_driver
+
+        denied = self.client.post(
+            f"/api/evidence/driver-upload/{self.other_incident_id}",
+            files={"video": ("recording.webm", io.BytesIO(b"not used"), "video/webm")},
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        allowed = self.client.post(
+            f"/api/evidence/driver-upload/{self.incident_id}",
+            files={"video": ("recording.webm", io.BytesIO(self.sample_webm_bytes), "video/webm;codecs=vp8")},
+            data={"pre_event_seconds": "0", "post_event_seconds": "1"},
+        )
+        self.assertEqual(allowed.status_code, 201, allowed.text)
+        self.assertEqual(allowed.json()["incidentId"], self.incident_id)
+        self.assertEqual(allowed.json()["status"], "available")
 
     def test_upload_rejected_for_splash_screen(self):
         splash_bytes = self._create_splash_webm()

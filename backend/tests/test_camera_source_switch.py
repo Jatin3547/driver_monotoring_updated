@@ -1,6 +1,7 @@
 """Tests for camera switching, crash-proof HTTP MJPEG reader, and monitoring source endpoints."""
 
 import io
+import os
 import threading
 import time
 import unittest
@@ -104,6 +105,10 @@ class TestCameraSourceSwitch(unittest.TestCase):
 
         cam.stop()
 
+    @unittest.skipUnless(
+        os.environ.get("FLEETGUARD_RUN_HARDWARE_CAMERA_TESTS") == "1",
+        "Live camera-source endpoint check is opt-in; it may initialize local camera hardware.",
+    )
     def test_api_select_source_endpoint(self):
         # Select webcam
         headers = _manager_headers()

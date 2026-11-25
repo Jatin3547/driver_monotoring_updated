@@ -41,6 +41,13 @@ class PhoneDetection:
     orientation: str = "unknown"  # portrait | landscape | unknown
     proximity: str = "unknown"    # near-face | steering-level | distant | unknown
     error: Optional[str] = None
+    inference_attempted: bool = False
+    detection_count: int = 0
+    class_id: Optional[int] = None
+    inference_ms: Optional[float] = None
+    rejection_reason: Optional[str] = None
+    frame_width: Optional[int] = None
+    frame_height: Optional[int] = None
 
 
 
@@ -58,10 +65,14 @@ class PhoneDetector:
         self.model_name = model_name
         self.conf_threshold = conf_threshold
         self.input_size = input_size
+        self.model_path: Optional[str] = None
 
         self.model: Optional[Any] = None
         self.available: bool = False
         self.last_error: Optional[str] = None
+        self.ultralytics_version: Optional[str] = None
+        self.iou_threshold: Optional[float] = None
+        self.model_class_name: Optional[str] = None
 
         self._lock = threading.Lock()
         self._latest_detection = PhoneDetection(timestamp=time.time())
@@ -89,12 +100,22 @@ class PhoneDetector:
                 candidate = os.path.join(backend_dir, self.model_name)
                 if os.path.exists(candidate):
                     model_target = candidate
+            self.model_path = os.path.abspath(model_target) if os.path.exists(model_target) else model_target
 
             logger.info("Loading pretrained YOLO model %s...", model_target)
             self.model = YOLO(model_target)
+            self.model_path = os.path.abspath(getattr(self.model, "ckpt_path", model_target))
+            try:
+                import ultralytics
+                from ultralytics.cfg import DEFAULT_CFG
+                self.ultralytics_version = getattr(ultralytics, "__version__", None)
+                self.iou_threshold = float(DEFAULT_CFG.iou)
+            except Exception:
+                pass
 
             # Validate that class 67 corresponds to cell phone
             class_name = self.model.names.get(self.CELL_PHONE_CLASS_ID, "")
+            self.model_class_name = str(class_name)
             if "phone" not in class_name.lower():
                 logger.warning(
                     "Model class %d is '%s' (expected 'cell phone')",
@@ -187,7 +208,7 @@ class PhoneDetector:
                 error=self.last_error or "Detector unavailable",
             )
 
-        t0 = time.time()
+        t0 = time.perf_counter()
         try:
             results = self.model.predict(
                 frame,
@@ -196,13 +217,15 @@ class PhoneDetector:
                 conf=self.conf_threshold,
                 verbose=False,
             )
-            elapsed_ms = (time.time() - t0) * 1000.0
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
             best_conf = 0.0
             best_bbox = None
+            detection_count = 0
 
             if results and len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
+                detection_count = len(boxes)
                 for box in boxes:
                     conf = float(box.conf[0].item())
                     if conf > best_conf:
@@ -224,12 +247,24 @@ class PhoneDetector:
 
             detection = PhoneDetection(
                 detected=detected,
-                confidence=round(best_conf, 2),
+                confidence=float(best_conf),
                 bbox=best_bbox,
                 timestamp=now,
                 in_driver_zone=in_zone,
                 orientation=orientation,
                 proximity=proximity,
+                inference_attempted=True,
+                detection_count=detection_count,
+                class_id=self.CELL_PHONE_CLASS_ID if detected else None,
+                inference_ms=round(elapsed_ms, 1),
+                frame_width=int(frame.shape[1]),
+                frame_height=int(frame.shape[0]),
+                rejection_reason=(
+                    None if detected and in_zone
+                    else "outside_driver_zone" if detected
+                    else "below_confidence_threshold" if detection_count
+                    else "no_phone_candidate"
+                ),
             )
 
             with self._lock:
@@ -245,7 +280,25 @@ class PhoneDetector:
 
         except Exception as exc:
             logger.warning("Error running YOLO phone inference: %s", exc)
-            return PhoneDetection(detected=False, timestamp=now, error=str(exc))
+            elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            detection = PhoneDetection(
+                detected=False,
+                timestamp=now,
+                error=str(exc),
+                inference_attempted=True,
+                inference_ms=elapsed_ms,
+                rejection_reason="inference_error",
+                frame_width=int(frame.shape[1]) if getattr(frame, "shape", None) and len(frame.shape) >= 2 else None,
+                frame_height=int(frame.shape[0]) if getattr(frame, "shape", None) and len(frame.shape) >= 2 else None,
+            )
+            with self._lock:
+                self._latest_detection = detection
+                self._inference_count += 1
+                self._avg_inference_ms = (
+                    0.8 * self._avg_inference_ms + 0.2 * elapsed_ms
+                    if self._inference_count > 1 else elapsed_ms
+                )
+            return detection
 
     def detect_non_blocking(
         self, frame: Any, face_bbox: Optional[Tuple[int, int, int, int]] = None
@@ -272,14 +325,32 @@ class PhoneDetector:
 
     def get_diagnostics(self) -> Dict[str, Any]:
         with self._lock:
+            latest = self._latest_detection
             return {
                 "available": self.available,
                 "model": self.model_name,
+                "modelPath": self.model_path,
+                "ultralyticsVersion": self.ultralytics_version,
+                "modelClassId": self.CELL_PHONE_CLASS_ID,
+                "modelClassName": self.model_class_name,
+                "classesFiltered": [self.CELL_PHONE_CLASS_ID],
                 "confidenceThreshold": self.conf_threshold,
                 "inputSize": self.input_size,
+                "iouThreshold": self.iou_threshold,
                 "inferenceCount": self._inference_count,
                 "avgInferenceMs": round(self._avg_inference_ms, 1),
                 "lastError": self.last_error,
+                "inferenceAttempted": latest.inference_attempted,
+                "detectionCount": latest.detection_count,
+                "detectedClassId": latest.class_id,
+                "confidence": latest.confidence if latest.detected else None,
+                "bbox": list(latest.bbox) if latest.bbox is not None else None,
+                "driverZone": latest.in_driver_zone if latest.detected else None,
+                "phoneAccepted": bool(latest.detected and latest.in_driver_zone),
+                "rejectionReason": latest.rejection_reason or latest.error,
+                "lastInferenceMs": latest.inference_ms,
+                "frameWidth": latest.frame_width,
+                "frameHeight": latest.frame_height,
             }
 
     def shutdown(self) -> None:

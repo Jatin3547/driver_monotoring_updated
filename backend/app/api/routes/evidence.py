@@ -28,7 +28,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, MANAGER_ROLES
+from app.api.deps import get_current_driver, get_db, MANAGER_ROLES
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.models import Driver, Evidence, Incident, User, Vehicle
@@ -75,6 +75,42 @@ def _require_evidence_manager(
 
 
 router = APIRouter(dependencies=[Depends(_require_evidence_manager)])
+driver_router = APIRouter()
+
+
+@driver_router.post("/driver-upload/{incident_id}", response_model=EvidenceOut, status_code=status.HTTP_201_CREATED)
+async def upload_driver_incident_evidence(
+    incident_id: str,
+    video: UploadFile = File(...),
+    snapshot: Optional[UploadFile] = File(None),
+    pre_event_seconds: float = Form(5.0),
+    post_event_seconds: float = Form(10.0),
+    event_timestamp: Optional[str] = Form(None),
+    driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Allow a driver to upload evidence only for an incident linked to their profile."""
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if incident.driver_id != driver.id:
+        raise HTTPException(status_code=403, detail="You may upload evidence only for your own incident")
+    video_media_type = (video.content_type or "").split(";", 1)[0].strip().lower()
+    if video_media_type not in {"video/webm", "video/mp4"}:
+        raise HTTPException(status_code=415, detail="Incident evidence must be a WebM or MP4 video")
+    if video.size is not None and video.size > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Incident video exceeds the 25 MB limit")
+    if snapshot and snapshot.size is not None and snapshot.size > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Incident snapshot exceeds the 2 MB limit")
+    return await upload_incident_evidence(
+        incident_id,
+        video,
+        snapshot,
+        pre_event_seconds,
+        post_event_seconds,
+        event_timestamp,
+        db,
+    )
 
 
 def _get_user_or_token(

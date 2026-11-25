@@ -17,13 +17,27 @@ from datetime import datetime, timezone
 import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
+from app.core.config import settings
 
-from app.ai.factory import ai_status, get_detector, get_driver_status, get_video_frame
-from app.api.deps import get_db, require_fleet_admin
+from app.ai.browser_sessions import browser_sessions
+from app.ai.factory import (
+    ai_status,
+    browser_detector_if_ready,
+    clear_browser_driver_state,
+    get_browser_detector,
+    get_detector,
+    get_driver_status,
+    get_video_frame,
+    pause_fleet_camera_for_browser_session,
+    resume_fleet_camera_after_browser_session,
+)
+from app.api.deps import get_current_driver, get_db, require_fleet_admin
 from app.models import Driver, SafetyEvent, User, Vehicle
 from app.services.safety_engine import process_detection
-from app.services.serializers import safety_event_to_dict
+from app.services.serializers import alert_to_dict, incident_to_dict, safety_event_to_dict
+from app.websocket.manager import manager
 
 router = APIRouter()
 
@@ -39,6 +53,184 @@ def monitoring_status(db: Session = Depends(get_db), _admin: User = Depends(requ
         status = get_driver_status(driver.code, vehicle.code)
         results.append(status)
     return results
+
+
+@router.get("/browser-sessions")
+def monitoring_browser_sessions(_admin: User = Depends(require_fleet_admin)):
+    """Operational summary of active driver browser-camera sessions."""
+    return browser_sessions.list_active()
+
+
+@router.get("/my-status")
+def monitoring_my_status(driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+    """Return a monitoring snapshot for the authenticated driver's own account."""
+    session = browser_sessions.get(driver.id)
+    if session and browser_sessions.active(session) and session.get("lastStatus"):
+        return session["lastStatus"]
+    if not driver.assigned_vehicle_id:
+        raise HTTPException(status_code=404, detail="No vehicle is currently assigned to this driver")
+    vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Assigned vehicle was not found")
+    # Never expose the fleet server's physical camera feed as if it belonged to
+    # this driver. Driver AI is live only while their authenticated browser
+    # session is sending frames.
+    return {
+        "driverId": driver.code,
+        "vehicleId": vehicle.code,
+        "isOnline": False,
+        "presenceDetected": False,
+        "eyeState": "no-signal",
+        "drowsinessLevel": "no-signal",
+        "yawnStatus": "no-signal",
+        "phoneUseStatus": "no-signal",
+        "distractionStatus": "no-signal",
+        "lastUpdated": datetime.now(timezone.utc).isoformat(),
+        "source": "none",
+        "cameraStatus": "stopped",
+        "aiHealth": "degraded",
+    }
+
+
+@router.post("/my-camera-session")
+def start_my_camera_session(driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+    """Start/reuse the signed-in driver's authenticated browser AI session."""
+    if not driver.assigned_vehicle_id:
+        raise HTTPException(status_code=409, detail="A vehicle must be assigned before starting AI monitoring")
+    vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=409, detail="Assigned vehicle was not found")
+    existing = browser_sessions.get(driver.id)
+    if existing:
+        raise HTTPException(status_code=409, detail="A camera session is already active for this driver account; reconnect may resume it")
+    try:
+        detector = get_browser_detector()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    with detector._inference_lock:
+        detector.pipeline._trackers.pop(driver.code, None)
+    try:
+        browser_sessions.start(driver.id, driver.code, vehicle.code)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    pause_fleet_camera_for_browser_session()
+    return {
+        "ok": True,
+        "driverId": driver.code,
+        "vehicleId": vehicle.code,
+        "maxFps": min(settings.ai_target_fps, round(1 / settings.ai_browser_frame_interval_seconds)),
+        "frameWidth": settings.ai_browser_frame_width,
+        "frameHeight": settings.ai_browser_frame_height,
+        "jpegQuality": settings.ai_browser_jpeg_quality,
+        "frameIntervalMs": round(settings.ai_browser_frame_interval_seconds * 1000),
+        "recording": False,
+    }
+
+
+@router.delete("/my-camera-session")
+def stop_my_camera_session(driver: Driver = Depends(get_current_driver)):
+    """Stop only the authenticated driver's camera session and reset its tracker."""
+    session = browser_sessions.stop(driver.id)
+    detector = browser_detector_if_ready()
+    if detector:
+        with detector._inference_lock:
+            detector.pipeline._trackers.pop(driver.code, None)
+    if session is not None and not browser_sessions.list_active():
+        resume_fleet_camera_after_browser_session()
+    return {"ok": True, "stopped": session is not None}
+
+
+@router.post("/my-camera-frame")
+async def process_my_camera_frame(
+    request: Request,
+    driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Accept a capped JPEG from this driver's active session and run live inference."""
+    session = browser_sessions.get(driver.id)
+    if session is None or not browser_sessions.active(session):
+        raise HTTPException(status_code=409, detail="Start your camera session before uploading frames")
+    if session["driverCode"] != driver.code:
+        raise HTTPException(status_code=403, detail="Camera session does not belong to this driver")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "image/jpeg":
+        raise HTTPException(status_code=415, detail="Camera frames must use image/jpeg")
+    if request.headers.get("content-length") and int(request.headers["content-length"]) > 300_000:
+        raise HTTPException(status_code=413, detail="Camera frame exceeds the 300 KB limit")
+    body_buffer = bytearray()
+    async for chunk in request.stream():
+        body_buffer.extend(chunk)
+        if len(body_buffer) > 300_000:
+            raise HTTPException(status_code=413, detail="Camera frame exceeds the 300 KB limit")
+    if not body_buffer:
+        raise HTTPException(status_code=400, detail="Camera frame is empty")
+    body = bytes(body_buffer)
+
+    vehicle = db.query(Vehicle).filter(Vehicle.id == driver.assigned_vehicle_id).first() if driver.assigned_vehicle_id else None
+    if not vehicle or vehicle.code != session["vehicleCode"]:
+        raise HTTPException(status_code=409, detail="Assigned vehicle changed; restart your camera session")
+
+    now = time.monotonic()
+    with session["lock"]:
+        if session.get("inferenceBusy") or now - session["lastFrameAt"] < settings.ai_browser_frame_interval_seconds:
+            session["framesRejected"] = session.get("framesRejected", 0) + 1
+            return {"accepted": False, "status": session.get("lastStatus")}
+        session["inferenceBusy"] = True
+
+    try:
+        def decode_and_infer():
+            import cv2
+            import numpy as np
+            image = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError("Invalid JPEG frame")
+            h, w = image.shape[:2]
+            if w > 1280 or h > 720:
+                raise ValueError("Camera frame must be at most 1280 × 720")
+            return get_browser_detector().process_browser_frame(driver.code, session["vehicleCode"], image)
+
+        processing_started = time.perf_counter()
+        try:
+            detections, status_snapshot = await run_in_threadpool(decode_and_infer)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"AI inference unavailable: {exc}") from exc
+
+        session["framesProcessed"] = session.get("framesProcessed", 0) + 1
+        session["lastFrameAt"] = time.monotonic()
+        session["lastFrameAtIso"] = datetime.now(timezone.utc).isoformat()
+        elapsed_seconds = max(time.monotonic() - session["startedAt"], 0.001)
+        status_snapshot["processingLatencyMs"] = round((time.perf_counter() - processing_started) * 1000.0, 1)
+        status_snapshot["inferenceFps"] = round(session["framesProcessed"] / elapsed_seconds, 2)
+        samples = session.setdefault("processingSamplesMs", [])
+        samples.append(status_snapshot["processingLatencyMs"])
+        del samples[:-120]
+        status_snapshot["averageProcessingLatencyMs"] = round(sum(samples) / len(samples), 1)
+        status_snapshot["peakProcessingLatencyMs"] = max(samples)
+        status_snapshot["framesRejected"] = session.get("framesRejected", 0)
+        session["lastStatus"] = status_snapshot
+        await manager.broadcast("monitoring_update", status_snapshot)
+        new_events = []
+        new_incidents = []
+        for detection in detections:
+            previous = session["eventCooldowns"].get(detection.event_type, 0.0)
+            if time.monotonic() - previous < settings.ai_browser_event_cooldown_seconds:
+                continue
+            session["eventCooldowns"][detection.event_type] = time.monotonic()
+            result = process_detection(db, driver, vehicle, detection, capture_evidence=False)
+            event_payload = safety_event_to_dict(result["event"], driver.code, vehicle.code)
+            new_events.append(event_payload)
+            await manager.broadcast("safety_event", event_payload)
+            if result["incident"] is not None:
+                incident_payload = incident_to_dict(result["incident"], driver, vehicle)
+                new_incidents.append({"id": result["incident"].id, "driverId": driver.code})
+                await manager.broadcast("incident_created", incident_payload)
+            if result["alert"] is not None:
+                await manager.broadcast("alert_created", alert_to_dict(result["alert"], driver, vehicle))
+        return {"accepted": True, "status": status_snapshot, "events": new_events, "incidents": new_incidents}
+    finally:
+        with session["lock"]:
+            session["inferenceBusy"] = False
 
 
 @router.get("/ai-status")
@@ -67,6 +259,11 @@ def monitoring_thresholds(_admin: User = Depends(require_fleet_admin)):
         "phoneModel": settings.ai_phone_model,
         "phoneConfidenceThreshold": settings.ai_phone_confidence_threshold,
         "eventCooldownSeconds": settings.ai_event_cooldown_seconds,
+        "browserFrameIntervalSeconds": settings.ai_browser_frame_interval_seconds,
+        "browserFrameWidth": settings.ai_browser_frame_width,
+        "browserFrameHeight": settings.ai_browser_frame_height,
+        "browserJpegQuality": settings.ai_browser_jpeg_quality,
+        "browserEventCooldownSeconds": settings.ai_browser_event_cooldown_seconds,
     }
 
 
@@ -215,10 +412,13 @@ def monitoring_events(db: Session = Depends(get_db), limit: int = 25, _admin: Us
     from app.ai.factory import active_source
 
     detector = get_detector()
-    if active_source() == "live":
+    source = active_source()
+    if source == "live":
         drivers = [d for d in db.query(Driver).all() if d.code == "DRV-001" and d.status in _ONLINE_STATUSES and d.assigned_vehicle_id]
-    else:
+    elif source == "simulation":
         drivers = [d for d in db.query(Driver).all() if d.status in _ONLINE_STATUSES and d.assigned_vehicle_id][:3]
+    else:
+        drivers = []
 
     for driver in drivers:
         recent = (

@@ -7,7 +7,10 @@ class SafetyEventOut(BaseModel):
     vehicleId: str
     type: str
     severity: str
-    confidence: float
+    confidence: float | None = None
+    durationSeconds: float | None = None
+    metrics: dict | None = None
+    recoveryState: str | None = None
     source: str
     timestamp: str
     snapshotUrl: str | None = None

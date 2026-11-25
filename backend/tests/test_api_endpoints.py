@@ -62,8 +62,9 @@ class TestApiIntegration(unittest.TestCase):
         if len(data) > 0:
             first = data[0]
             self.assertIn("driverId", first)
-            self.assertIn("metrics", first)
             self.assertIn("source", first)
+            if first["source"] == "simulation":
+                self.assertIn("metrics", first)
 
     def test_monitoring_ai_status_endpoint(self):
         """GET /api/monitoring/ai-status returns honest diagnostic reporting."""
@@ -180,6 +181,7 @@ class TestApiIntegration(unittest.TestCase):
             "/api/vehicles",
             "/api/gps/vehicles",
             "/api/monitoring/ai-status",
+            "/api/monitoring/browser-sessions",
             "/api/monitoring/thresholds",
             "/api/analytics/driver-leaderboard",
             "/api/fleet/summary",
@@ -228,6 +230,78 @@ class TestApiIntegration(unittest.TestCase):
         self.assertEqual(gps.status_code, 200, gps.text)
         self.assertEqual(gps.json()["vehicleId"], "VEH-001")
         self.assertIn("lat", gps.json())
+
+    def test_browser_camera_session_endpoints_are_driver_scoped(self):
+        driver_token = _get_driver_token(self.client)
+        driver_headers = {"Authorization": f"Bearer {driver_token}"}
+
+        status = self.client.get("/api/monitoring/my-status", headers=driver_headers)
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["source"], "none")
+        self.assertEqual(status.json()["cameraStatus"], "stopped")
+
+        # Managers cannot impersonate a driver to start their browser camera.
+        manager_start = self.client.post("/api/monitoring/my-camera-session", headers=self.admin_headers)
+        self.assertEqual(manager_start.status_code, 403)
+
+        # A driver cannot submit frames before their own session has started.
+        frame = self.client.post(
+            "/api/monitoring/my-camera-frame",
+            headers={**driver_headers, "Content-Type": "image/jpeg"},
+            content=b"not-a-frame",
+        )
+        self.assertEqual(frame.status_code, 409)
+
+    def test_browser_camera_frame_runs_inference_and_broadcasts_status(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch, AsyncMock
+        from app.ai.browser_sessions import browser_sessions
+        from app.db.session import SessionLocal
+        from app.models import Driver
+        from app.websocket.manager import manager
+        import cv2
+        import numpy as np
+
+        driver_headers = {"Authorization": f"Bearer {_get_driver_token(self.client)}"}
+        with SessionLocal() as db:
+            driver_record_id = db.query(Driver).filter(Driver.code == "DRV-001").first().id
+        detector = SimpleNamespace(
+            _inference_lock=__import__("threading").RLock(),
+            pipeline=SimpleNamespace(_trackers={}),
+            process_browser_frame=lambda driver_code, vehicle_code, frame: ([], {
+                "driverId": driver_code, "vehicleId": vehicle_code, "isOnline": True,
+                "presenceDetected": True, "eyeState": "normal", "drowsinessLevel": "normal",
+                "yawnStatus": "normal", "phoneUseStatus": "no-signal", "distractionStatus": "normal",
+                "source": "browser_live", "cameraStatus": "browser_active", "aiHealth": "healthy",
+                "lastUpdated": "2026-11-24T00:00:00+00:00", "metrics": {"ear": .3, "mar": .1, "headYaw": 0},
+            }),
+        )
+        try:
+            with patch("app.api.routes.monitoring.get_browser_detector", return_value=detector), \
+                    patch("app.websocket.manager.manager.broadcast", new_callable=AsyncMock) as broadcast:
+                started = self.client.post("/api/monitoring/my-camera-session", headers=driver_headers)
+                self.assertEqual(started.status_code, 200, started.text)
+
+                malformed = self.client.post(
+                    "/api/monitoring/my-camera-frame", headers={**driver_headers, "Content-Type": "image/jpeg"},
+                    content=b"not-a-jpeg",
+                )
+                self.assertEqual(malformed.status_code, 400, malformed.text)
+
+                ok, encoded = cv2.imencode(".jpg", np.zeros((120, 160, 3), dtype=np.uint8))
+                self.assertTrue(ok)
+                frame = self.client.post(
+                    "/api/monitoring/my-camera-frame", headers={**driver_headers, "Content-Type": "image/jpeg"},
+                    content=encoded.tobytes(),
+                )
+                self.assertEqual(frame.status_code, 200, frame.text)
+                self.assertTrue(frame.json()["accepted"])
+                self.assertEqual(frame.json()["status"]["source"], "browser_live")
+                self.assertIn("processingLatencyMs", frame.json()["status"])
+                self.assertIn("inferenceFps", frame.json()["status"])
+                broadcast.assert_awaited_with("monitoring_update", frame.json()["status"])
+        finally:
+            browser_sessions.stop(driver_record_id)
 
     def test_driver_can_access_own_trips(self):
         """Driver-role user can list their own trips via /trips/my-trips."""

@@ -6,15 +6,18 @@ needs to know which one is active — it just reads `settings.ai_mode`.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class DetectionResult:
     event_type: str  # drowsiness|eye_closure|yawning|phone_use|distraction|no_presence
     severity: str  # low|medium|high
-    confidence: float
+    confidence: float | None  # calibrated detector confidence only (e.g. YOLO)
     source: str  # "simulation" | "live" — never fabricated/mislabeled
+    duration_seconds: float | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseDetector(ABC):
@@ -22,3 +25,10 @@ class BaseDetector(ABC):
     def analyze_frame(self, driver_code: str) -> list[DetectionResult]:
         """Return zero or more detections for the current frame/tick."""
         raise NotImplementedError
+
+
+class UnavailableDetector(BaseDetector):
+    """Honest no-op used when LIVE mode is unavailable; it never fabricates demo detections."""
+
+    def analyze_frame(self, driver_code: str) -> list[DetectionResult]:
+        return []

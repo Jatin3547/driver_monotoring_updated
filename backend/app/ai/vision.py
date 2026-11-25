@@ -14,7 +14,9 @@ Design Principles:
 
 import logging
 import os
+import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.ai.analysis import (
@@ -31,17 +33,25 @@ logger = logging.getLogger("fleet.ai.vision")
 
 try:
     import cv2
-    import mediapipe as mp
-
-    VISION_DEPENDENCIES_AVAILABLE = True
+    OPENCV_AVAILABLE = True
 except ImportError:
-    VISION_DEPENDENCIES_AVAILABLE = False
+    cv2 = None
+    OPENCV_AVAILABLE = False
+
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    mp = None
+    MEDIAPIPE_AVAILABLE = False
+
+VISION_DEPENDENCIES_AVAILABLE = OPENCV_AVAILABLE and MEDIAPIPE_AVAILABLE
 
 
 class LiveVisionDetector(BaseDetector):
     """MediaPipe FaceMesh / FaceLandmarker + background threaded camera driver detector."""
 
-    def __init__(self, camera_index: Optional[Any] = None) -> None:
+    def __init__(self, camera_index: Optional[Any] = None, *, use_camera: bool = True) -> None:
         if not VISION_DEPENDENCIES_AVAILABLE:
             raise RuntimeError(
                 "Live AI mode requires opencv-python and mediapipe. "
@@ -51,12 +61,14 @@ class LiveVisionDetector(BaseDetector):
         self.camera_index = camera_index if camera_index is not None else settings.ai_camera_index
 
         # 1. Background Camera Capture Worker
-        self.camera = CameraManager(
-            camera_index=self.camera_index,
-            target_fps=settings.ai_target_fps,
-            max_reconnect_retries=settings.ai_camera_reconnect_max_retries,
-        )
-        self.camera.start()
+        self.camera = None
+        if use_camera:
+            self.camera = CameraManager(
+                camera_index=self.camera_index,
+                target_fps=settings.ai_target_fps,
+                max_reconnect_retries=settings.ai_camera_reconnect_max_retries,
+            )
+            self.camera.start()
 
         # 2. MediaPipe FaceMesh / FaceLandmarker initialization (compatible with both legacy and Tasks API)
         self._face_mesh = None
@@ -106,6 +118,7 @@ class LiveVisionDetector(BaseDetector):
         self._cached_status: Dict[str, Any] = {}
         self._last_face_bbox: Optional[Tuple[int, int, int, int]] = None
         self._last_features: Optional[Any] = None
+        self._inference_lock = threading.RLock()
 
         # 4. Pretrained YOLO Phone Detector (asynchronous background inference)
         self.phone_detector = None
@@ -122,6 +135,8 @@ class LiveVisionDetector(BaseDetector):
 
     def _process_live_driver(self, vehicle_code: Optional[str] = None) -> Tuple[List[DetectionResult], Dict[str, Any]]:
         """Processes the latest camera frame for the live driver with temporal caching."""
+        if self.camera is None:
+            return [], {}
         now = time.time()
         # If analyzed within the last 150ms, reuse the result to prevent CPU lockup
         if (now - self._last_process_time) < 0.15 and self._cached_status:
@@ -187,6 +202,72 @@ class LiveVisionDetector(BaseDetector):
             return []
         detections, _ = self._process_live_driver()
         return detections
+
+    def process_browser_frame(self, driver_code: str, vehicle_code: str, frame: Any) -> Tuple[List[DetectionResult], Dict[str, Any]]:
+        """Run inference on one authenticated driver's browser-uploaded frame.
+
+        Model instances are shared to bound memory, inference is serialized,
+        and temporal trackers remain keyed by driver code.
+        """
+        if self._face_mesh is None and self._face_landmarker is None:
+            raise RuntimeError("Face landmark model is unavailable")
+        started_at = time.perf_counter()
+        with self._inference_lock:
+            import cv2
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_started = time.perf_counter()
+            landmarks = []
+            if self._face_mesh is not None:
+                result = self._face_mesh.process(rgb_frame)
+                if result and result.multi_face_landmarks:
+                    landmarks = result.multi_face_landmarks
+            else:
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                result = self._face_landmarker.detect(mp_image)
+                if result and result.face_landmarks:
+                    landmarks = result.face_landmarks
+
+            features = None
+            face_bbox = None
+            if landmarks:
+                h, w = frame.shape[:2]
+                face = select_driver_face(landmarks, w, h)
+                if face is not None:
+                    pts = face.landmark if hasattr(face, "landmark") else face
+                    features = extract_features_from_landmarks(pts, w, h)
+                    face_bbox = extract_face_bbox(pts, w, h)
+            mediapipe_ms = round((time.perf_counter() - face_started) * 1000.0, 1)
+
+            phone_detection = None
+            yolo_started = time.perf_counter()
+            if self.phone_detector is not None:
+                # Run synchronously for this driver's frame; the asynchronous
+                # fleet camera detector has a shared result slot and is not safe
+                # for multiple independent browser sessions.
+                phone_detection = self.phone_detector._sync_predict(frame.copy(), face_bbox)
+            yolo_ms = round((time.perf_counter() - yolo_started) * 1000.0, 1) if self.phone_detector is not None else None
+
+            now = time.monotonic()
+            detections, status = self.pipeline.process_frame_features(driver_code, features, now, phone_detection)
+            processing_ms = round((time.perf_counter() - started_at) * 1000.0, 1)
+            status.update({
+                "driverId": driver_code,
+                "vehicleId": vehicle_code,
+                "cameraStatus": "active",
+                "aiHealth": "healthy",
+                "source": "browser_live",
+                "frameTimestamp": datetime.now(timezone.utc).isoformat(),
+                "processingLatencyMs": processing_ms,
+                "mediaPipeLatencyMs": mediapipe_ms,
+                "yoloLatencyMs": yolo_ms,
+            })
+            if settings.environment.lower() == "development":
+                status["phoneDiagnostics"] = (
+                    self.phone_detector.get_diagnostics()
+                    if self.phone_detector is not None
+                    else {"available": False, "lastError": "Phone detector is disabled or unavailable"}
+                )
+            return detections, status
 
     def get_monitoring_status(self, driver_code: str, vehicle_code: Optional[str] = None) -> Dict[str, Any]:
         """Returns structured real-time monitoring status and metrics for the frontend."""
@@ -257,7 +338,7 @@ class LiveVisionDetector(BaseDetector):
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Reports hardware and inference health."""
-        camera_diag = self.camera.diagnostics
+        camera_diag = self.camera.diagnostics if self.camera else {"status": "browser_sessions", "isConnected": True}
         phone_diag = self.phone_detector.get_diagnostics() if self.phone_detector else {"available": False}
         return {
             "source": "live",
@@ -271,7 +352,8 @@ class LiveVisionDetector(BaseDetector):
     def shutdown(self) -> None:
         """Cleanly releases all resources on server shutdown."""
         logger.info("Shutting down LiveVisionDetector...")
-        self.camera.stop()
+        if self.camera:
+            self.camera.stop()
         if self._face_mesh:
             try:
                 self._face_mesh.close()

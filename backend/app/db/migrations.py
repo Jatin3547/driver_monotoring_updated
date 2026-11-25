@@ -35,6 +35,17 @@ MIGRATION_SCHEMA: dict[str, list[tuple[str, str, bool, bool]]] = {
         # Links a driver record to a User account (for driver-role login)
         ("user_id", "VARCHAR", True, True),
     ],
+    "safety_events": [
+        ("model_confidence", "FLOAT", True, False),
+        ("duration_seconds", "FLOAT", True, False),
+        ("metrics", "JSON", True, False),
+        ("recovery_state", "VARCHAR", True, False),
+    ],
+    "gps_locations": [
+        ("accuracy_m", "FLOAT", True, False),
+        ("reported_speed_kmh", "FLOAT", True, False),
+        ("reported_heading", "FLOAT", True, False),
+    ],
 }
 
 
