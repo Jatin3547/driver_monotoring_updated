@@ -43,7 +43,8 @@ export async function uploadIncidentEvidence(
   snapshotBlob?: Blob,
   preEventSeconds = 5.0,
   postEventSeconds = 10.0,
-  eventTimestamp?: string
+  eventTimestamp?: string,
+  asDriver = false,
 ): Promise<Evidence> {
   const formData = new FormData();
   formData.append('video', videoBlob, 'recording.webm');
@@ -62,7 +63,8 @@ export async function uploadIncidentEvidence(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}/evidence/upload/${incidentId}`, {
+  const uploadPath = asDriver ? `/evidence/driver-upload/${incidentId}` : `/evidence/upload/${incidentId}`;
+  const res = await fetch(`${API_BASE_URL}${uploadPath}`, {
     method: 'POST',
     body: formData,
     headers,

@@ -8,6 +8,7 @@ interface UseIncidentRecorderProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   driverId?: string;
   isLiveFeedValid?: boolean;
+  uploadAsDriver?: boolean;
   onUploadSuccess?: (incidentId: string) => void;
   onUploadError?: (error: Error) => void;
 }
@@ -24,6 +25,7 @@ export function useIncidentRecorder({
   videoRef,
   driverId = 'DRV-001',
   isLiveFeedValid = true,
+  uploadAsDriver = false,
   onUploadSuccess,
   onUploadError,
 }: UseIncidentRecorderProps) {
@@ -152,8 +154,14 @@ export function useIncidentRecorder({
       mediaRecorderRef.current = null;
       headerChunkRef.current = null;
       rollingBufferRef.current = [];
+      activeIncidentRef.current = null;
+      activeTriggerTimestampRef.current = null;
+      postEventChunksRef.current = [];
+      snapshotBlobRef.current = null;
       if (postEventTimerRef.current) window.clearTimeout(postEventTimerRef.current);
+      postEventTimerRef.current = null;
       if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
     };
   }, [stream]);
 
@@ -166,7 +174,7 @@ export function useIncidentRecorder({
       }
 
       // Check driver match
-      if (eventDriverId && eventDriverId !== driverId && eventDriverId !== 'DRV-001') {
+      if (eventDriverId && eventDriverId !== driverId) {
         return;
       }
 
@@ -232,14 +240,18 @@ export function useIncidentRecorder({
         const triggerTs = activeTriggerTimestampRef.current || new Date().toISOString();
 
         try {
-          await uploadIncidentEvidence(
+          const evidence = await uploadIncidentEvidence(
             incidentId,
             videoBlob,
             snapshotBlob,
             5.0,
             10.0,
-            triggerTs
+            triggerTs,
+            uploadAsDriver,
           );
+          if (evidence.status === 'failed') {
+            throw new Error(evidence.errorMessage ?? 'The server could not process the incident video.');
+          }
           setLastUploadedIncidentId(incidentId);
           if (onUploadSuccess) onUploadSuccess(incidentId);
         } catch (err: unknown) {
@@ -256,7 +268,7 @@ export function useIncidentRecorder({
         }
       }, 10000);
     },
-    [driverId, isLiveFeedValid, captureStillSnapshot, onUploadSuccess, onUploadError]
+    [driverId, isLiveFeedValid, captureStillSnapshot, onUploadSuccess, onUploadError, uploadAsDriver]
   );
 
   return {

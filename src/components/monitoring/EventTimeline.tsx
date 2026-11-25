@@ -38,7 +38,6 @@ export function EventTimeline({ events, drivers, vehicles }: Props) {
                 {driverById.get(event.driverId)?.name ?? event.driverId} · {vehicleById.get(event.vehicleId)?.plateNumber ?? event.vehicleId} ·{' '}
                 {formatDateTime(event.timestamp)}
               </p>
-              <p className="text-xs text-text-muted">Confidence: {Math.round(event.confidence * 100)}%</p>
             </li>
           ))}
         </ol>

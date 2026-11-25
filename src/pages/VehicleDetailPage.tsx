@@ -47,7 +47,7 @@ export default function VehicleDetailPage() {
 
         <div className="lg:col-span-2 space-y-6">
           <Card>
-            <CardHeader title="Current location" subtitle={location ? `${location.speedKmh} km/h` : 'No live signal'} />
+            <CardHeader title="Current location" subtitle={location ? `${location.gpsStatus === 'live' ? 'LIVE GPS' : location.gpsStatus === 'stale' ? 'STALE GPS' : 'SIMULATED GPS'} · ${location.speedKmh == null ? 'Speed not reported' : `${location.speedKmh} km/h`}` : 'No GPS signal'} />
             {location ? (
               <FleetMap locations={[location]} vehicles={[vehicle]} drivers={drivers ?? []} height="320px" />
             ) : (

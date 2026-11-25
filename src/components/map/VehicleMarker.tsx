@@ -1,5 +1,5 @@
 import L from 'leaflet';
-import type { VehicleStatus } from '@/types';
+import type { VehicleStatus, VehicleLocation } from '@/types';
 
 const statusHex: Record<VehicleStatus, string> = {
   active: '#16A34A',
@@ -8,8 +8,8 @@ const statusHex: Record<VehicleStatus, string> = {
   offline: '#DC2626',
 };
 
-export function vehicleDivIcon(status: VehicleStatus, heading: number = 0): L.DivIcon {
-  const color = statusHex[status];
+export function vehicleDivIcon(status: VehicleStatus, heading: number = 0, gpsStatus?: VehicleLocation['gpsStatus']): L.DivIcon {
+  const color = gpsStatus === 'live' ? '#059669' : gpsStatus === 'stale' ? '#64748B' : gpsStatus === 'simulated' ? '#2563EB' : statusHex[status];
   return L.divIcon({
     className: '',
     html: `

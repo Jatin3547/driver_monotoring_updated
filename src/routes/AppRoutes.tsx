@@ -1,21 +1,24 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { RequireAuth } from '@/routes/RequireAuth';
 import { RequireRole } from '@/routes/RequireRole';
-import LoginPage from '@/pages/LoginPage';
-import DashboardPage from '@/pages/DashboardPage';
-import DriverDashboardPage from '@/pages/DriverDashboardPage';
-import DriversPage from '@/pages/DriversPage';
-import DriverDetailPage from '@/pages/DriverDetailPage';
-import VehiclesPage from '@/pages/VehiclesPage';
-import VehicleDetailPage from '@/pages/VehicleDetailPage';
-import MonitoringPage from '@/pages/MonitoringPage';
-import GpsTrackingPage from '@/pages/GpsTrackingPage';
-import IncidentsPage from '@/pages/IncidentsPage';
-import AnalyticsPage from '@/pages/AnalyticsPage';
-import SettingsPage from '@/pages/SettingsPage';
+import { LoadingState } from '@/components/ui/States';
 import { useAuth } from '@/hooks/useAuth';
 import { homePathForRole } from '@/utils/roles';
+
+const LoginPage = lazy(() => import('@/pages/LoginPage'));
+const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
+const DriverDashboardPage = lazy(() => import('@/pages/DriverDashboardPage'));
+const DriversPage = lazy(() => import('@/pages/DriversPage'));
+const DriverDetailPage = lazy(() => import('@/pages/DriverDetailPage'));
+const VehiclesPage = lazy(() => import('@/pages/VehiclesPage'));
+const VehicleDetailPage = lazy(() => import('@/pages/VehicleDetailPage'));
+const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'));
+const GpsTrackingPage = lazy(() => import('@/pages/GpsTrackingPage'));
+const IncidentsPage = lazy(() => import('@/pages/IncidentsPage'));
+const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 /** Smart redirect from "/" for authenticated users based on role. */
 function RootRedirect() {
@@ -28,6 +31,7 @@ function RootRedirect() {
 
 export function AppRoutes() {
   return (
+    <Suspense fallback={<LoadingState label="Loading page…" />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
 
@@ -123,6 +127,7 @@ export function AppRoutes() {
         <Route path="*" element={<RoleHomeRedirect />} />
       </Route>
     </Routes>
+    </Suspense>
   );
 }
 

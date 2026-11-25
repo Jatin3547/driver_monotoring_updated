@@ -19,8 +19,8 @@ export function MonitoringStatusGrid({ statuses, drivers, vehicles }: Props) {
 
   // Ensure the live monitored person (DRV-001 or live source) is always at the top position
   const sortedStatuses = [...statuses].sort((a, b) => {
-    const aLive = a.driverId === 'DRV-001' || a.source === 'live';
-    const bLive = b.driverId === 'DRV-001' || b.source === 'live';
+    const aLive = a.driverId === 'DRV-001' || a.source === 'live' || a.source === 'browser_live';
+    const bLive = b.driverId === 'DRV-001' || b.source === 'live' || b.source === 'browser_live';
     if (aLive && !bLive) return -1;
     if (!aLive && bLive) return 1;
     return a.driverId.localeCompare(b.driverId);

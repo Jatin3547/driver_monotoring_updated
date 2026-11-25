@@ -15,7 +15,10 @@ export interface MonitoringEvent {
   type: MonitoringEventType;
   severity: Severity;
   timestamp: string; // ISO datetime
-  confidence: number; // 0-1, populated by AI model in Phase 3
+  confidence: number | null; // Present only when supplied by a detector such as YOLO.
+  durationSeconds?: number | null;
+  metrics?: Record<string, number> | null;
+  recoveryState?: 'detected' | 'recovered' | null;
   snapshotUrl?: string;
   source?: 'live' | 'simulation' | string;
 }
@@ -33,12 +36,47 @@ export interface DriverMonitoringStatus {
   phoneUseStatus: MonitoringSignalStatus;
   distractionStatus: MonitoringSignalStatus;
   lastUpdated: string;
-  source?: 'simulation' | 'live';
+  source?: 'simulation' | 'live' | 'browser_live' | 'none';
   metrics?: {
     ear: number;
     mar: number;
     headYaw: number;
   };
-  cameraStatus?: 'active' | 'disconnected' | 'reconnecting' | 'simulated' | 'stopped';
+  processingLatencyMs?: number;
+  averageProcessingLatencyMs?: number;
+  peakProcessingLatencyMs?: number;
+  framesRejected?: number;
+  mediaPipeLatencyMs?: number;
+  yoloLatencyMs?: number | null;
+  inferenceFps?: number;
+  frameTimestamp?: string;
+  cameraStatus?: 'active' | 'browser_active' | 'disconnected' | 'reconnecting' | 'simulated' | 'stopped' | string;
   aiHealth?: 'healthy' | 'degraded';
+  error?: string | null;
+  phoneDiagnostics?: {
+    available?: boolean;
+    model?: string;
+    modelPath?: string | null;
+    ultralyticsVersion?: string | null;
+    modelClassId?: number;
+    modelClassName?: string | null;
+    classesFiltered?: number[];
+    confidenceThreshold?: number;
+    inputSize?: number;
+    iouThreshold?: number | null;
+    inferenceCount?: number;
+    avgInferenceMs?: number;
+    lastError?: string | null;
+    inferenceAttempted?: boolean;
+    detectionCount?: number;
+    detectedClassId?: number | null;
+    confidence?: number | null;
+    bbox?: number[] | null;
+    driverZone?: boolean | null;
+    phoneAccepted?: boolean;
+    rejectionReason?: string | null;
+    lastInferenceMs?: number | null;
+    frameWidth?: number | null;
+    frameHeight?: number | null;
+  };
 }

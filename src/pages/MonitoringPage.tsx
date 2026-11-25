@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
-import { getMonitoringStatuses, getMonitoringEvents, getAiStatus } from '@/services/api/monitoringService';
+import { getMonitoringStatuses, getMonitoringEvents, getAiStatus, getBrowserCameraSessions, type BrowserCameraSession } from '@/services/api/monitoringService';
 import { getDrivers } from '@/services/api/driverService';
 import { getVehicles } from '@/services/api/vehicleService';
 import { useFleetSocketEvent } from '@/hooks/useFleetSocketEvent';
 import { MonitoringStatusGrid } from '@/components/monitoring/MonitoringStatusGrid';
 import { EventTimeline } from '@/components/monitoring/EventTimeline';
 import { LoadingState, ErrorState } from '@/components/ui/States';
+import { Card, CardHeader } from '@/components/ui/Card';
 import { Camera, Radio, Volume2, VolumeX, BellRing } from 'lucide-react';
 import { playImmediateDriverWarning, isAudioMuted, setAudioMuted, stopContinuousAlarm } from '@/utils/audioAlert';
+import { formatDateTime } from '@/utils/formatDate';
 import type { DriverMonitoringStatus, MonitoringEvent } from '@/types';
 
 export default function MonitoringPage() {
@@ -17,6 +19,7 @@ export default function MonitoringPage() {
   const { data: drivers } = useAsyncData(() => getDrivers(), []);
   const { data: vehicles } = useAsyncData(() => getVehicles(), []);
   const { data: aiStatus } = useAsyncData(() => getAiStatus(), []);
+  const { data: browserSessions, refetch: refreshBrowserSessions } = useAsyncData(() => getBrowserCameraSessions(), []);
 
   const [liveStatuses, setLiveStatuses] = useState<DriverMonitoringStatus[] | null>(null);
   const [liveEvents, setLiveEvents] = useState<MonitoringEvent[] | null>(null);
@@ -32,6 +35,11 @@ export default function MonitoringPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(refreshBrowserSessions, 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshBrowserSessions]);
+
   const statuses = liveStatuses ?? initialStatuses ?? [];
   const events = liveEvents ?? initialEvents ?? [];
 
@@ -43,8 +51,8 @@ export default function MonitoringPage() {
         ? base.map((s) => (s.driverId === update.driverId ? update : s))
         : [...base, update];
       return updated.sort((a, b) => {
-        const aLive = a.driverId === 'DRV-001' || a.source === 'live';
-        const bLive = b.driverId === 'DRV-001' || b.source === 'live';
+        const aLive = a.driverId === 'DRV-001' || a.source === 'live' || a.source === 'browser_live';
+        const bLive = b.driverId === 'DRV-001' || b.source === 'live' || b.source === 'browser_live';
         if (aLive && !bLive) return -1;
         if (!aLive && bLive) return 1;
         return a.driverId.localeCompare(b.driverId);
@@ -87,7 +95,9 @@ export default function MonitoringPage() {
   if (status === 'loading') return <LoadingState label="Connecting to monitoring feeds…" />;
   if (status === 'error') return <ErrorState message={error ?? 'Unknown error'} onRetry={refetch} />;
 
-  const isLive = aiStatus?.activeSource === 'live';
+  const isServerLive = aiStatus?.activeSource === 'live';
+  const isBrowserLive = aiStatus?.activeSource === 'browser_live';
+  const isUnavailable = aiStatus?.activeSource === 'unavailable';
 
   return (
     <div className="space-y-6">
@@ -95,16 +105,20 @@ export default function MonitoringPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-surface border border-border rounded-lg p-3">
         <div
           className={`flex items-center gap-2 text-xs rounded-md px-3 py-1.5 ${
-            isLive
+            (isServerLive || isBrowserLive)
               ? 'bg-status-success-bg border border-status-success-border text-status-success-text'
+            : isUnavailable
+              ? 'bg-status-danger-bg border border-status-danger-border text-status-danger-text'
               : 'bg-status-info-bg border border-status-info-border text-status-info-text'
           }`}
         >
-          {isLive ? <Radio size={14} /> : <Camera size={14} />}
-          {isLive ? (
+          {(isServerLive || isBrowserLive) ? <Radio size={14} /> : <Camera size={14} />}
+          {(isServerLive || isBrowserLive) ? (
             <span>
-              <strong>LIVE AI ACTIVE</strong> — OpenCV/MediaPipe/YOLO running (camera #{aiStatus?.cameraIndex})
+              <strong>LIVE AI ACTIVE</strong> — {isBrowserLive ? 'driver browser camera inference' : `server camera #${aiStatus?.cameraIndex}`}
             </span>
+          ) : isUnavailable ? (
+            <span><strong>LIVE AI UNAVAILABLE</strong> — {aiStatus?.error ?? 'Camera or vision dependencies are unavailable.'}</span>
           ) : (
             <span>
               <strong>DEMO / SIMULATION MODE</strong> — Deterministic AI metrics active
@@ -144,9 +158,40 @@ export default function MonitoringPage() {
         </div>
       </div>
 
+      <BrowserCameraSessionsCard sessions={browserSessions ?? []} />
+
       <MonitoringStatusGrid statuses={statuses} drivers={drivers ?? []} vehicles={vehicles ?? []} />
 
       <EventTimeline events={events} drivers={drivers ?? []} vehicles={vehicles ?? []} />
     </div>
+  );
+}
+
+function BrowserCameraSessionsCard({ sessions }: { sessions: BrowserCameraSession[] }) {
+  return (
+    <Card>
+      <CardHeader
+        title="Driver browser camera sessions"
+        subtitle="Connected driver feeds and AI session health"
+        action={<span className="rounded-full bg-surface-inset px-2.5 py-1 text-xs text-text-muted">{sessions.length} active</span>}
+      />
+      {sessions.length === 0 ? (
+        <p className="text-sm text-text-muted">No driver browser camera sessions are active.</p>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2">
+          {sessions.map((session) => (
+            <li key={session.driverId} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-text-primary">{session.driverId} <span className="text-text-muted">· {session.vehicleId}</span></p>
+                <p className="mt-1 text-xs text-text-muted">{session.lastFrameAt ? `Last AI frame ${formatDateTime(session.lastFrameAt)}` : `Started ${formatDateTime(session.startedAt)}`}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${session.status === 'active' && session.aiHealth === 'healthy' ? 'bg-status-success-bg text-status-success-text' : 'bg-status-warning-bg text-status-warning-text'}`}>
+                {session.status === 'active' ? session.aiHealth : 'Connecting'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

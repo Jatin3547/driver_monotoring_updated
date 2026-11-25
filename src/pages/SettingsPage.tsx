@@ -97,13 +97,18 @@ export default function SettingsPage() {
           />
           <StatusRow
             label="AI mode (actually active)"
-            value={aiStatus?.activeSource === 'live' ? 'LIVE camera inference' : 'Simulation'}
-            tone={aiStatus?.activeSource === 'live' ? 'success' : 'neutral'}
+            value={aiStatus?.activeSource === 'live' ? 'Server camera inference' : aiStatus?.activeSource === 'browser_live' ? 'Driver browser camera inference' : aiStatus?.activeSource === 'unavailable' ? 'Live AI unavailable' : 'Simulation'}
+            tone={aiStatus?.activeSource === 'live' || aiStatus?.activeSource === 'browser_live' ? 'success' : aiStatus?.activeSource === 'unavailable' ? 'danger' : 'neutral'}
           />
           <StatusRow
-            label="Vision dependencies (OpenCV/MediaPipe/YOLO)"
-            value={aiStatus?.visionDependenciesInstalled ? 'Installed' : 'Not installed (simulation still works)'}
+            label="Face vision dependencies (OpenCV/MediaPipe)"
+            value={aiStatus?.visionDependenciesInstalled ? 'Installed' : 'Not installed'}
             tone={aiStatus?.visionDependenciesInstalled ? 'success' : 'neutral'}
+          />
+          <StatusRow
+            label="Phone detector (YOLO)"
+            value={aiStatus?.phoneDetectorAvailable ? 'Available' : 'Unavailable / disabled'}
+            tone={aiStatus?.phoneDetectorAvailable ? 'success' : 'warning'}
             last
           />
           <p className="text-xs text-text-muted mt-4">
